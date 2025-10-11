@@ -3,7 +3,7 @@ name: Deploy to SiteGround via FTP
 on:
   push:
     branches:
-      - main   # or "master" if that’s your default branch
+      - main
 
 jobs:
   ftp-deploy:
@@ -15,12 +15,12 @@ jobs:
       - name: Upload Theme via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ftp.christopherl176.sg-host.com            #
+          server: ftp.christopherl176.sg-host.com
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps                           # FTPS is best; use ftp if plain
+          protocol: ftp                     # 👈 Switch to plain FTP for now
           port: 21
-          local-dir: /projectbaldwin-theme/
+          local-dir: ./                     # or wp-content/themes/projectbaldwin-theme/
           server-dir: public_html/wp-content/themes/projectbaldwin-theme/
           exclude: |
             **/.git*
