@@ -20,7 +20,7 @@ jobs:
           password: ${{ secrets.FTP_PASSWORD }}
           protocol: ftps                           # FTPS is best; use ftp if plain
           port: 21
-          local-dir: /projectbaldwin-theme/
+          local-dir: ./
           server-dir: public_html/wp-content/themes/projectbaldwin-theme/
           exclude: |
             **/.git*
