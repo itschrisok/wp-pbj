@@ -1,0 +1,31 @@
+name: Deploy to SiteGround via FTP
+
+on:
+  push:
+    branches:
+      - main   # or "master" if that’s your default branch
+
+jobs:
+  ftp-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Upload Theme via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ftp.christopherl176.sg-host.com            #
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps                           # FTPS is best; use ftp if plain
+          port: 21
+          local-dir: /projectbaldwin-theme/
+          server-dir: public_html/wp-content/themes/projectbaldwin-theme/
+          exclude: |
+            **/.git*
+            **/.DS_Store
+            node_modules/**
+            vendor/**
+            dist/**
+            .env
