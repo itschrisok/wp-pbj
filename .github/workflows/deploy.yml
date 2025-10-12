@@ -21,7 +21,7 @@ jobs:
           protocol: ftp                     # 👈 Switch to plain FTP for now
           port: 21
           local-dir: ./                     # or wp-content/themes/projectbaldwin-theme/
-          server-dir: public_html/wp-content/themes/projectbaldwin-theme/
+          server-dir: christopherl176.sg-host.com/public_html/wp-content/themes/projectbaldwin-theme/
           exclude: |
             **/.git*
             **/.DS_Store
