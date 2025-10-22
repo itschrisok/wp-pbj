@@ -1,5 +1,3 @@
-
-
 <?php
 /**
  * Voting Sort class for Project Baldwin.
@@ -137,4 +135,3 @@ class PB_Voting_Sort {
         return $rows;
     }
 }
- 
