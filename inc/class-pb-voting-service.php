@@ -357,8 +357,10 @@ class PB_Voting_Service {
   </div>
 </div>
 
+// Unified admin JS for round-type toggling, custom mode, and participant search.
 <script>
 (function($){
+  // === Toggle Round Type Fields ===
   function toggleFields() {
     var val = $('input[name="pb_round_state"]:checked').val();
     $('.pb-field-group').hide();
@@ -366,30 +368,37 @@ class PB_Voting_Service {
     if(val === 'final') $('.pb-field-final').show();
     if(val === 'custom') $('.pb-field-custom').show();
   }
-  $(document).on('change', 'input[name="pb_round_state"]', toggleFields);
-  $(document).on('change', '#pb_custom_select_toggle', function(){
-    if($(this).is(':checked')) {
+
+  // === Toggle Custom Selection Mode ===
+  function toggleCustomMode() {
+    if($('#pb_custom_select_toggle').is(':checked')) {
       $('.pb-custom-by-category').show();
       $('.pb-custom-by-manual').hide();
     } else {
       $('.pb-custom-by-category').hide();
       $('.pb-custom-by-manual').show();
     }
-  });
+  }
+
+  // === Participant Search Filter ===
+  function setupParticipantSearch() {
+    $('#pb-participant-search').on('input', function() {
+      var filter = $(this).val().toLowerCase();
+      $('.pb-custom-by-manual .pb-checkbox-list label').each(function() {
+        var text = $(this).text().toLowerCase();
+        $(this).toggle(text.indexOf(filter) > -1);
+      });
+    });
+  }
+
+  // === Init on Document Ready ===
   $(document).ready(function(){
     toggleFields();
-    $('#pb_custom_select_toggle').trigger('change');
-  });
-</script>
-<script>
-(function($){
-  // Enable participant search filter
-  $('#pb-participant-search').on('input', function() {
-    var filter = $(this).val().toLowerCase();
-    $('.pb-custom-by-manual .pb-checkbox-list label').each(function() {
-      var text = $(this).text().toLowerCase();
-      $(this).toggle(text.indexOf(filter) > -1);
-    });
+    toggleCustomMode();
+    setupParticipantSearch();
+    // Bind events
+    $(document).on('change', 'input[name="pb_round_state"]', toggleFields);
+    $(document).on('change', '#pb_custom_select_toggle', toggleCustomMode);
   });
 })(jQuery);
 </script>
