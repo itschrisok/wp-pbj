@@ -1,5 +1,18 @@
 <?php
 /**
+ * PB_Voting_Sort: Handles sorting of ranked voting participants for Project Baldwin.
+ *
+ * Responsibilities:
+ * - Sorts participant arrays by different strategies (recent, highest, lowest, tiebreaker).
+ * - Interacts with PB_Voting_Service to obtain ranked participants.
+ * - TODO: Consider moving rank assignment fully to this class for single responsibility.
+ * PB_Voting_Sort: Handles sorting of ranked voting participants for Project Baldwin.
+ *
+ * This file defines the PB_Voting_Sort class, which provides multiple sorting strategies
+ * for ranked voting participants, including recent, highest, lowest, and tiebreaker sorts.
+ * It interacts with PB_Voting_Service to fetch ranked participants and is used by the REST
+ * endpoints and admin UI for displaying sorted voting results.
+ * TODO: Consider moving rank assignment fully to this class for single responsibility.
  * Voting Sort class for Project Baldwin.
  * Handles sorting of ranked voting participants.
  */
@@ -9,6 +22,10 @@ if (!defined('ABSPATH')) {
 }
 
 class PB_Voting_Sort {
+    // ============================================================
+    // Sorting Entrypoint
+    // ============================================================
+
     /**
      * Apply the requested sort mode to the ranked participants for a round.
      *
@@ -17,6 +34,7 @@ class PB_Voting_Sort {
      * @return array
      */
     public static function apply($round_ref, $mode = 'recent') {
+        // Main entry: sorts ranked participants using the specified mode.
         $rank_rows = PB_Voting_Service::get_ranked_participants($round_ref);
         if (empty($rank_rows)) {
             return [];
@@ -37,10 +55,15 @@ class PB_Voting_Sort {
         }
     }
 
+    // ============================================================
+    // Sorting Implementations
+    // ============================================================
+
     /**
      * Sort by most recent vote (last_vote_at desc), fallback to rank.
      */
     public static function sort_recent(array $rows) {
+        // Sorts by most recent vote (desc), fallback to rank.
         usort($rows, function($a, $b) {
             $a_time = !empty($a['last_vote_at']) ? strtotime($a['last_vote_at']) : -INF;
             $b_time = !empty($b['last_vote_at']) ? strtotime($b['last_vote_at']) : -INF;
@@ -57,6 +80,7 @@ class PB_Voting_Sort {
      * Sort by rank ascending (1 is highest), fallback to post_id.
      */
     public static function sort_highest(array $rows) {
+        // Sorts by ascending rank (1 is highest), fallback to post_id.
         usort($rows, function($a, $b) {
             if ($a['rank'] === $b['rank']) {
                 return $a['post_id'] <=> $b['post_id'];
@@ -70,6 +94,7 @@ class PB_Voting_Sort {
      * Sort by rank descending (lowest is worst rank).
      */
     public static function sort_lowest(array $rows) {
+        // Sorts by descending rank (lowest/worst first).
         usort($rows, function($a, $b) {
             if ($a['rank'] === $b['rank']) {
                 return $a['post_id'] <=> $b['post_id'];
@@ -84,6 +109,7 @@ class PB_Voting_Sort {
      * Within group, by most recent vote.
      */
     public static function sort_tiebreaker(array $rows) {
+        // Groups by vote count, prioritizes ties, then sorts by recency within group.
         // Group by votes
         $voteMap = [];
         foreach ($rows as $row) {

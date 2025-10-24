@@ -1,5 +1,11 @@
 <?php
 /**
+ * Template: single-voting_round.php
+ *
+ * Responsibility:
+ * - Displays a single Voting Round, including round info, participants, and voting UI.
+ * - Interacts with PB_Voting_Service for participant, reference, and vote data.
+ * - Uses REST API endpoints for live vote updates and sorting.
  * Template for displaying a single Voting Round.
  */
 
@@ -16,11 +22,12 @@ get_header();
     <main id="main" class="site-main">
         <?php if (have_posts()) : ?>
             <?php while (have_posts()) : the_post();
+                // --- Voting Round Data Load ---
                 $round_id = get_the_ID();
                 $round_ref = get_post_meta($round_id, '_pb_round_ref', true);
                 $participants = (array) get_post_meta($round_id, '_pb_round_participants', true);
                 $participant_posts = [];
-
+                // Load participant post objects for display
                 if (!empty($participants)) {
                     $participant_posts = get_posts([
                         'post_type' => PB_Voting_Service::get_available_votable_types(),
@@ -29,7 +36,7 @@ get_header();
                         'posts_per_page' => count($participants),
                     ]);
                 }
-
+                // Fetch current vote totals for each participant
                 $vote_totals = [];
                 if ($round_ref) {
                     $vote_totals = PB_Voting_Service::get_round_vote_totals($round_ref);
@@ -46,7 +53,7 @@ get_header();
                     </header>
 
                     <?php
-                    // Voting round time info
+                    // --- Voting round time info ---
                     $round_start = get_post_meta($round_id, '_pb_round_start', true);
                     $round_duration = (int) get_post_meta($round_id, '_pb_round_duration', true);
                     $round_end_meta = get_post_meta($round_id, '_pb_round_end', true);
@@ -75,6 +82,7 @@ get_header();
                     <?php if (empty($participant_posts)) : ?>
                         <p class="notice notice-warning"><?php esc_html_e('No participants are currently linked to this round.', 'projectbaldwin'); ?></p>
                     <?php else : ?>
+                        <!-- Participants Section: Displays each participant and handles voting UI -->
                         <section class="pb-round-participants" data-round-ref="<?php echo esc_attr($round_ref); ?>">
                             <h2><?php esc_html_e('Participants', 'projectbaldwin'); ?></h2>
                             <label for="pb-sort-participants" style="display:block;margin-bottom:0.5em;">
@@ -117,16 +125,19 @@ get_header();
 
                 <script>
                 (function(){
+                    // --- Voting Round JS: Handles voting, sorting, and live updating UI ---
                     const restRoot = <?php echo wp_json_encode(rest_url('pb/v1/')); ?>;
                     const nonce = <?php echo wp_json_encode($rest_nonce); ?>;
                     const roundRef = <?php echo wp_json_encode($round_ref); ?>;
 
+                    // Update vote total in DOM
                     function updateVoteTotal(container, total) {
                         const totalEl = container.querySelector('[data-total]');
                         if (totalEl) {
                             totalEl.textContent = total + ' <?php echo esc_js(__('votes', 'projectbaldwin')); ?>';
                         }
                     }
+                    // Update rank in DOM
                     function updateRank(container, rank) {
                         const rankEl = container.querySelector('[data-rank]');
                         if (rankEl) {
@@ -160,6 +171,7 @@ get_header();
                         });
                     }
 
+                    // Fetch updated totals and ranks from backend and update DOM
                     function refreshTotalsAndRanks() {
                         var sortSelect = document.getElementById('pb-sort-participants');
                         var sortValue = sortSelect ? sortSelect.value : 'recent';
@@ -188,6 +200,7 @@ get_header();
                         }).catch(console.error);
                     }
 
+                    // Voting button handler
                     document.addEventListener('click', function(evt) {
                         const target = evt.target.closest('.pb-vote-button');
                         if (!target) return;
@@ -252,6 +265,7 @@ get_header();
                     refreshTotalsAndRanks();
                     setInterval(refreshTotalsAndRanks, 2000);
 
+                    // Countdown timer for round end
                     const countdownEl = document.getElementById('pb-countdown');
                     if (countdownEl) {
                         const endTs = parseInt(document.querySelector('.pb-round-times').getAttribute('data-end')) * 1000;

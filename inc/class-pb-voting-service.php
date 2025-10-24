@@ -1,5 +1,20 @@
 <?php
 /**
+ * PB_Voting_Service: Main voting service bootstrap for Project Baldwin.
+ *
+ * Responsibilities:
+ * - Registers custom meta fields, REST API endpoints, and admin pages for voting rounds.
+ * - Handles participant selection, vote tallying, round state, and result snapshots.
+ * - Interacts with PB_Voting_Sort for sorting/ranking logic.
+ * - Directly interacts with the WordPress database for vote storage and retrieval.
+ * PB_Voting_Service: Main voting service bootstrap for Project Baldwin.
+ *
+ * This file defines the PB_Voting_Service class, which orchestrates all voting-related
+ * functionality for Project Baldwin. Its responsibilities include registering custom meta fields,
+ * handling REST API endpoints, managing voting rounds and their participants, tallying votes,
+ * and providing admin UI for voting round management. It serves as the primary integration point
+ * for voting, working closely with PB_Voting_Sort for ranking and sorting logic, and interacts
+ * directly with the WordPress database for vote storage.
  * Voting service bootstrap for Project Baldwin.
  */
 
@@ -8,9 +23,11 @@ if (!defined('ABSPATH')) {
 }
 
 class PB_Voting_Service {
-    // ------------------------
+    // ============================================================
     // Initialization & Setup
-    // ------------------------
+    // ============================================================
+    // Registers hooks, meta fields, REST endpoints, and admin pages.
+
     private const REF_META_KEY = '_pb_ref_id';
     private const IN_VOTING_META_KEY = '_pb_in_voting';
     private const ROUND_REF_META = '_pb_round_ref';
@@ -37,6 +54,9 @@ class PB_Voting_Service {
         'custom',
     ];
 
+    /**
+     * Entrypoint: Registers all hooks for voting service.
+     */
     public static function init() {
         add_action('init', [__CLASS__, 'register_meta']);
         add_action('add_meta_boxes', [__CLASS__, 'register_meta_boxes']);
@@ -48,9 +68,11 @@ class PB_Voting_Service {
         add_action('admin_post_pb_end_voting_round', [__CLASS__, 'handle_end_voting_round']);
     }
 
-    // ------------------------
-    // Register Meta Fields
-    // ------------------------
+    // ============================================================
+    // Meta Field Registration
+    // ============================================================
+    // Registers meta fields for all votable post types and voting rounds.
+
     public static function register_meta() {
         foreach (self::get_available_votable_types() as $post_type) {
             register_post_meta($post_type, self::REF_META_KEY, [
@@ -133,9 +155,11 @@ class PB_Voting_Service {
         ]);
     }
 
-    // ------------------------
+    // ============================================================
     // Admin Meta Boxes
-    // ------------------------
+    // ============================================================
+    // Adds meta boxes to post edit screens for voting settings and round configuration.
+
     public static function register_meta_boxes() {
         foreach (self::get_available_votable_types() as $post_type) {
             add_meta_box(
@@ -177,6 +201,7 @@ class PB_Voting_Service {
     }
 
     public static function render_voting_round_meta_box($post) {
+        // Renders the meta box UI for voting round configuration in the admin.
         wp_nonce_field('pb_voting_round_meta', 'pb_voting_round_nonce');
 
         $state = get_post_meta($post->ID, self::ROUND_STATE_META, true) ?: 'custom';
@@ -286,10 +311,13 @@ class PB_Voting_Service {
         <?php
     }
 
-    // ------------------------
+    // ============================================================
     // Save Post Hooks
-    // ------------------------
+    // ============================================================
+    // Handles persistence of meta fields when posts (including rounds) are saved.
+
     public static function maybe_assign_reference_id($post_id, $post) {
+        // Assigns a human-readable reference ID to a votable post if missing.
         if (!self::should_handle_post($post_id, $post)) {
             return;
         }
@@ -302,6 +330,7 @@ class PB_Voting_Service {
     }
 
     public static function persist_in_voting_flag($post_id, $post) {
+        // Persists the "in voting" eligibility flag for a post.
         if (!self::should_handle_post($post_id, $post)) {
             return;
         }
@@ -315,6 +344,7 @@ class PB_Voting_Service {
     }
 
     public static function save_voting_round_meta($post_id, $post) {
+        // Saves voting round meta fields and recalculates participants list.
         if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
             return;
         }
@@ -373,10 +403,13 @@ class PB_Voting_Service {
         update_post_meta($post_id, self::ROUND_PARTICIPANTS_META, $participants);
     }
 
-    // ------------------------
-    // Participant Logic (Nomination, Final, Custom)
-    // ------------------------
+    // ============================================================
+    // Participant Calculation Logic
+    // ============================================================
+    // Determines which posts participate in a round, based on round type.
+
     private static function calculate_participants($state, array $categories, array $manual, $source_round_id) {
+        // Returns an array of participant post IDs for the round.
         switch ($state) {
             case 'nomination':
                 return self::fetch_nomination_participants($categories);
@@ -389,6 +422,7 @@ class PB_Voting_Service {
     }
 
     private static function fetch_nomination_participants(array $categories) {
+        // Returns eligible participant post IDs for a nomination round, filtered by categories.
         if (empty($categories)) {
             return [];
         }
@@ -416,6 +450,7 @@ class PB_Voting_Service {
     }
 
     private static function fetch_finalists($source_round_id) {
+        // Returns top finalist post IDs from a previous round.
         if (!$source_round_id) {
             return [];
         }
@@ -434,6 +469,7 @@ class PB_Voting_Service {
     }
 
     private static function fetch_manual_participant_options() {
+        // Returns an array of eligible posts for manual participant selection.
         $post_types = self::get_available_votable_types();
         if (empty($post_types)) {
             return [];
@@ -458,10 +494,13 @@ class PB_Voting_Service {
         return $options;
     }
 
-    // ------------------------
-    // Helper Functions
-    // ------------------------
+    // ============================================================
+    // Helper Functions & Utilities
+    // ============================================================
+    // Internal utilities for permission checks, sanitization, reference generation, etc.
+
     private static function should_handle_post($post_id, $post) {
+        // Determines if the post should be handled by voting logic.
         if (!$post instanceof WP_Post) {
             return false;
         }
@@ -505,9 +544,10 @@ class PB_Voting_Service {
         return "{$post_type}_{$post_id}_{$random}";
     }
 
-    // ------------------------
+    // ============================================================
     // Ranking & Snapshot Helpers
-    // ------------------------
+    // ============================================================
+    // Handles ranking, sorting, and snapshotting of round results.
 
     /**
      * Get ranked participants for a round reference, with live votes and rank.
@@ -516,6 +556,7 @@ class PB_Voting_Service {
      * @return array Array of arrays: [ 'post_id', 'post_ref', 'votes', 'rank' ]
      */
     public static function get_ranked_participants($round_ref) {
+        // Returns an array of ranked participants (post_id, post_ref, votes, rank, last_vote_at).
         $round_id = self::get_round_id_by_reference($round_ref);
         if (!$round_id) {
             return [];
@@ -556,6 +597,7 @@ class PB_Voting_Service {
             return $b['votes'] <=> $a['votes'];
         });
         // Assign rank (1-based, shared rank for ties)
+        // TODO: Move rank assignment fully to PB_Voting_Sort class for single responsibility.
         $current_rank = 0;
         $prev_votes = null;
         foreach ($rank_rows as $i => &$row) {
@@ -577,7 +619,7 @@ class PB_Voting_Service {
      * @return array
      */
     public static function get_sorted_participants($round_ref, $mode = 'recent') {
-        // Delegate to PB_Voting_Sort for sorting logic
+        // Delegates sorting to PB_Voting_Sort class.
         if (!class_exists('PB_Voting_Sort')) {
             require_once get_template_directory() . '/inc/class-pb-voting-sort.php';
         }
@@ -592,6 +634,7 @@ class PB_Voting_Service {
      * @return void
      */
     public static function snapshot_round_results($round_id, $round_ref) {
+        // Saves a snapshot of round results (for post-round archival).
         $ranked = self::get_ranked_participants($round_ref);
         // Store just the post_ids in order as legacy, but also full ranking
         $result_ids = array_map(function($row) { return $row['post_id']; }, $ranked);
@@ -603,9 +646,11 @@ class PB_Voting_Service {
         return array_values(array_filter(self::$eligible_post_types, 'post_type_exists'));
     }
 
-    // ------------------------
+    // ============================================================
     // REST API Routes
-    // ------------------------
+    // ============================================================
+    // Registers custom REST API endpoints for voting and round result queries.
+
     public static function register_rest_routes() {
         register_rest_route('pb/v1', '/vote', [
             'methods' => 'POST',
@@ -631,10 +676,13 @@ class PB_Voting_Service {
         ]);
     }
 
-    // ------------------------
-    // Vote Handling
-    // ------------------------
+    // ============================================================
+    // Vote Handling (REST)
+    // ============================================================
+    // Handles REST vote submissions, validates participants, and updates vote counts.
+
     public static function handle_vote_submission(WP_REST_Request $request) {
+        // Handles a POST vote submission via REST API.
         global $wpdb;
 
         // Ensure vote table exists (create if not)
@@ -718,6 +766,7 @@ class PB_Voting_Service {
      * REST: Return ranked or sorted results for round
      */
     public static function handle_round_totals(WP_REST_Request $request) {
+        // Returns sorted/ranked results for a voting round, for frontend live updates.
         $round_ref = $request->get_param('round_ref');
         $sort_mode = $request->get_param('sort');
         $sort_mode = is_string($sort_mode) ? strtolower($sort_mode) : 'recent';
@@ -728,10 +777,13 @@ class PB_Voting_Service {
         ]);
     }
 
-    // ------------------------
-    // Database Accessors
-    // ------------------------
+    // ============================================================
+    // Database Accessors & Vote Storage
+    // ============================================================
+    // Handles direct DB access for votes, including table creation and query helpers.
+
     private static function get_vote_records($round_ref, array $limit_posts = []) {
+        // Returns an array of vote records for a round, optionally limited to certain posts.
         global $wpdb;
 
         $table = self::get_vote_table();
@@ -759,6 +811,7 @@ class PB_Voting_Service {
     }
 
     private static function normalize_gmt_datetime($mysql_datetime) {
+        // Converts MySQL datetime to ISO8601 in GMT, or null if invalid.
         if (empty($mysql_datetime)) {
             return null;
         }
@@ -772,6 +825,7 @@ class PB_Voting_Service {
     }
 
     private static function get_vote_totals($round_ref, array $limit_posts = []) {
+        // Returns an array of post_ref => total votes for a round.
         $records = self::get_vote_records($round_ref, $limit_posts);
 
         $totals = [];
@@ -799,6 +853,7 @@ class PB_Voting_Service {
      * Ensures the vote table exists with (round_ref, post_ref) as unique/primary key.
      */
     private static function maybe_create_vote_table() {
+        // Creates the votes table if it does not exist.
         global $wpdb;
         $table = self::get_vote_table();
         $charset_collate = $wpdb->get_charset_collate();
@@ -814,6 +869,7 @@ class PB_Voting_Service {
     }
 
     private static function get_round_id_by_reference($round_ref) {
+        // Looks up a voting round post ID by its reference string.
         $round = get_posts([
             'post_type' => 'voting_round',
             'post_status' => ['publish', 'draft'],
@@ -827,6 +883,7 @@ class PB_Voting_Service {
     }
 
     private static function get_post_id_by_reference($post_ref) {
+        // Looks up a participant post ID by its reference string.
         $post = get_posts([
             'post_type' => self::get_available_votable_types(),
             'post_status' => ['publish', 'draft'],
@@ -838,9 +895,11 @@ class PB_Voting_Service {
 
         return $post ? (int) $post[0] : 0;
     }
-    // ------------------------
-    // Admin Pages (Active/Overview Rounds)
-    // ------------------------
+    // ============================================================
+    // Admin Pages (Overview & End Round)
+    // ============================================================
+    // Adds admin submenu for overview/active voting rounds and handles "end round" actions.
+
     public static function register_admin_pages() {
         add_submenu_page(
             'edit.php?post_type=voting_round',
@@ -853,6 +912,7 @@ class PB_Voting_Service {
     }
 
     public static function render_active_rounds_page() {
+        // Renders the admin page listing all voting rounds with status and actions.
         $now = current_time('timestamp');
         $rounds = get_posts([
             'post_type'   => 'voting_round',
@@ -924,6 +984,7 @@ class PB_Voting_Service {
      * Handles the admin action to end a voting round early.
      */
     public static function handle_end_voting_round() {
+        // Handles the admin "End Now" action for a voting round.
         if (!isset($_GET['round_id'], $_GET['_wpnonce'])) {
             wp_die(__('Missing parameters.', 'projectbaldwin'));
         }
