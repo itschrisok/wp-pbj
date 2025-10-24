@@ -5,7 +5,7 @@ This section outlines the primary responsibilities and roles of each core file i
 
 - **`inc/class-pb-voting-service.php`**: Backend voting service. Handles registration of meta fields, REST API endpoints, admin page logic, participant selection, vote tallying, round state, and result snapshots. Interacts with the database and PB_Voting_Sort for ranking.
 - **`inc/class-pb-voting-sort.php`**: Sorting/ranking logic. Contains algorithms for sorting participants (recent, highest, lowest, tiebreaker) and (future) rank assignment.
-- **`single-voting_round.php`**: Frontend template for displaying a single voting round. Handles loading participant data, integrating REST API endpoints, rendering voting UI, and live updating via polling/SSE.
+- **`single-voting_round.php`**: Frontend template fowp_nonce_field('pb_voting_round_meta', 'pb_voting_round_nonce');r displaying a single voting round. Handles loading participant data, integrating REST API endpoints, rendering voting UI, and live updating via polling/SSE.
 - **Other files**: Theme templates, JavaScript for frontend interactivity, and additional admin UI files as necessary.
 
 

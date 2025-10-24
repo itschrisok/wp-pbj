@@ -237,6 +237,8 @@ class PB_Voting_Service {
         // Contextual visibility is controlled via inline JS toggling.
 
         wp_nonce_field('pb_voting_round_meta', 'pb_voting_round_nonce');
+        $pb_rest_nonce = wp_create_nonce('wp_rest');
+        $pb_rest_root  = rest_url('pb/v1/');
 ?>
 <div class="pb-voting-round-meta">
 
@@ -316,7 +318,7 @@ class PB_Voting_Service {
     <div class="pb-custom-by-manual" style="margin-top:10px;">
       <p><label><strong>Custom Participants</strong></label></p>
       <input type="text" id="pb-participant-search" placeholder="Search participants..." style="width:100%;margin-bottom:5px;">
-      <div class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
+      <div id="pb-selected-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
         <?php
         $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
         $manual = (array) get_post_meta($post->ID, '_pb_round_manual_participants', true);
@@ -361,14 +363,57 @@ class PB_Voting_Service {
   </div>
   <p><em>Use this list to verify or adjust cached participants before publishing.</em></p>
 
-  <script>
-  // === Handle participant refresh (placeholder for REST logic) ===
-  (function($){
-    $('#pb-refresh-participants').on('click', function(){
-      alert('Participant refresh triggered. This will later call a REST API to recalculate.');
+<script>
+// === Admin: Refresh participants via REST ===
+(function($){
+  var restRoot = <?php echo wp_json_encode( $pb_rest_root ); ?>;
+  var restNonce = <?php echo wp_json_encode( $pb_rest_nonce ); ?>;
+  var roundId = <?php echo (int) $post->ID; ?>;
+
+  function renderSelectedParticipants(ids) {
+    var box = $('#pb-selected-participants');
+    if (!box.length) return;
+    if (!Array.isArray(ids) || !ids.length) {
+      box.html('<em>No participants cached yet.</em>');
+      return;
+    }
+    var html = '';
+    ids.forEach(function(pid){
+      var $label = $('input[name="pb_round_manual_participants[]"][value="'+pid+'"]').closest('label');
+      var labelText = $label.length ? $label.text().trim() : ('ID ' + pid);
+      html += '<label><input type="checkbox" name="pb_round_participants[]" value="'+pid+'" checked> '
+              + $('<div/>').text(labelText).html()
+              + '</label><br>';
     });
-  })(jQuery);
-  </script>
+    box.html(html);
+  }
+
+  $('#pb-refresh-participants').on('click', function(){
+    var $btn = $(this);
+    $btn.prop('disabled', true).text('Refreshing...');
+    fetch(restRoot + 'round/' + roundId + '/refresh', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-WP-Nonce': restNonce
+      },
+      body: JSON.stringify({})
+    }).then(function(res){
+      if (!res.ok) throw new Error('Refresh failed');
+      return res.json();
+    }).then(function(data){
+      if (data && Array.isArray(data.participants)) {
+        renderSelectedParticipants(data.participants);
+      }
+    }).catch(function(err){
+      console.error(err);
+      alert('Unable to refresh participants.');
+    }).finally(function(){
+      $btn.prop('disabled', false).text('Refresh Participants');
+    });
+  });
+})(jQuery);
+</script>
 </div>
 
 // Unified admin JS for round-type toggling, custom mode, and participant search.
@@ -543,33 +588,32 @@ class PB_Voting_Service {
         }
     }
 
-    private static function fetch_nomination_participants(array $categories) {
-        // Returns eligible participant post IDs for a nomination round, filtered by categories.
-        if (empty($categories)) {
-            return [];
-        }
+private static function fetch_nomination_participants(array $categories) {
+    if (empty($categories)) return [];
 
-        $post_types = self::get_available_votable_types();
-        if (empty($post_types)) {
-            return [];
-        }
+    $taxonomy = taxonomy_exists('pb_category') ? 'pb_category' :
+                (taxonomy_exists('connections') ? 'connections' : '');
+    if (!$taxonomy) return [];
 
-        $query = new WP_Query([
-            'post_type' => $post_types,
-            'post_status' => 'publish',
-            'posts_per_page' => -1,
-            'fields' => 'ids',
-            'tax_query' => [
-                [
-                    'taxonomy' => 'pb_category',
-                    'field' => 'term_id',
-                    'terms' => $categories,
-                ],
-            ],
-        ]);
+    $post_types = self::get_available_votable_types();
+    if (empty($post_types)) return [];
 
-        return $query->posts ?: [];
-    }
+    $query = new WP_Query([
+        'post_type'      => $post_types,
+        'post_status'    => 'publish',
+        'meta_key'       => self::IN_VOTING_META_KEY,
+        'meta_value'     => '1',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'tax_query'      => [[
+            'taxonomy' => $taxonomy,
+            'field'    => 'term_id',
+            'terms'    => $categories,
+        ]],
+    ]);
+
+    return $query->posts ?: [];
+}
 
     private static function fetch_finalists($source_round_id) {
         // Returns top finalist post IDs from a previous round.
@@ -796,6 +840,11 @@ class PB_Voting_Service {
             'callback' => [__CLASS__, 'handle_round_totals'],
             'permission_callback' => '__return_true',
         ]);
+        register_rest_route('pb/v1', '/round/(?P<round_id>\d+)/refresh', [
+            'methods'  => 'POST',
+            'callback' => [__CLASS__, 'refresh_round_participants'],
+            'permission_callback' => function() { return current_user_can('edit_posts'); },
+]);
     }
 
     // ============================================================
@@ -898,6 +947,28 @@ class PB_Voting_Service {
             'results' => $sorted,
         ]);
     }
+    public static function refresh_round_participants(WP_REST_Request $request) {
+        $round_id = (int) $request->get_param('round_id');
+        if (!$round_id || get_post_type($round_id) !== 'voting_round') {
+            return new WP_Error('pb_invalid_round', __('Invalid round.', 'projectbaldwin'), ['status' => 400]);
+        }
+        if (!current_user_can('edit_post', $round_id)) {
+            return new WP_Error('pb_forbidden', __('Insufficient permissions.', 'projectbaldwin'), ['status' => 403]);
+        }
+
+        $state        = get_post_meta($round_id, self::ROUND_STATE_META, true);
+        $categories   = (array) get_post_meta($round_id, self::ROUND_CATEGORY_META, true);
+        $manual       = (array) get_post_meta($round_id, self::ROUND_MANUAL_META, true);
+        $source_round = (int) get_post_meta($round_id, self::ROUND_SOURCE_META, true);
+
+        $participants = self::calculate_participants($state ?: 'custom', $categories, $manual, $source_round);
+        update_post_meta($round_id, self::ROUND_PARTICIPANTS_META, $participants);
+
+        return rest_ensure_response([
+        'round_id'     => $round_id,
+        'participants' => array_map('intval', $participants),
+        ]);
+    } 
 
     // ============================================================
     // Database Accessors & Vote Storage
