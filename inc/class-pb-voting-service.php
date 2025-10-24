@@ -332,29 +332,43 @@ class PB_Voting_Service {
     </p>
   </div>
 
-  <!-- === Section: Selected Participants and Round Reference === -->
-  <h3>Summary</h3>
-  <div class="notice notice-info">
-    <p><strong>Round Reference:</strong> 
-      <?php
-      $ref = get_post_meta($post->ID, '_pb_round_ref', true);
-      echo $ref ? esc_html($ref) : '<em>Will generate on save</em>';
-      ?>
-    </p>
-    <p><strong>Selected Participants:</strong><br>
-      <?php
-      $cached = (array) get_post_meta($post->ID, '_pb_round_participants', true);
-      if (empty($cached)) {
-        echo '<em>No participants cached yet.</em>';
-      } else {
-        foreach ($cached as $pid) {
-          $p = get_post($pid);
-          echo '<span style="display:inline-block; margin-right:6px;">' . esc_html($p->post_title) . '</span>';
-        }
-      }
-      ?>
-    </p>
+  <!-- === Section: Round Reference and Selected Participants (Always Visible) === -->
+  <!--
+    This section always shows the round reference and allows admins to review and adjust the cached participant list.
+    The "Refresh Participants" button will later trigger a REST API call to recalculate participants.
+  -->
+  <h3>
+    Round Reference &amp; Selected Participants
+    <button type="button" id="pb-refresh-participants" class="button" style="float:right;">Refresh Participants</button>
+  </h3>
+  <p><strong>Round Reference:</strong>
+    <?php
+    $ref = get_post_meta($post->ID, '_pb_round_ref', true);
+    echo $ref ? esc_html($ref) : '<em>Will generate on save</em>';
+    ?>
+  </p>
+  <p><strong>Selected Participants:</strong></p>
+  <div class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
+    <?php
+    // Always show all eligible participants, pre-checking those in the current cached list
+    $cached = (array) get_post_meta($post->ID, '_pb_round_participants', true);
+    $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
+    foreach ($participants as $p) {
+      $checked = in_array($p->ID, $cached);
+      echo '<label><input type="checkbox" name="pb_round_participants[]" value="' . esc_attr($p->ID) . '" ' . checked($checked, true, false) . '> ' . esc_html($p->post_title) . '</label><br>';
+    }
+    ?>
   </div>
+  <p><em>Use this list to verify or adjust cached participants before publishing.</em></p>
+
+  <script>
+  // === Handle participant refresh (placeholder for REST logic) ===
+  (function($){
+    $('#pb-refresh-participants').on('click', function(){
+      alert('Participant refresh triggered. This will later call a REST API to recalculate.');
+    });
+  })(jQuery);
+  </script>
 </div>
 
 // Unified admin JS for round-type toggling, custom mode, and participant search.
@@ -503,6 +517,12 @@ class PB_Voting_Service {
 
         $participants = self::calculate_participants($state, $categories, $manual, $source_round);
         update_post_meta($post_id, self::ROUND_PARTICIPANTS_META, $participants);
+
+        // Save manually adjusted participant selections from the always-visible section.
+        // If the admin checks/unchecks participant boxes, this will persist the chosen list.
+        if (isset($_POST['pb_round_participants'])) {
+            update_post_meta($post_id, self::ROUND_PARTICIPANTS_META, array_map('absint', $_POST['pb_round_participants']));
+        }
     }
 
     // ============================================================
