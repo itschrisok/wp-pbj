@@ -272,7 +272,8 @@ class PB_Voting_Service {
     <div class="pb-checkbox-list">
       <?php
       $selected_cats = (array) get_post_meta($post->ID, '_pb_round_category_ids', true);
-      $terms = get_terms(['taxonomy' => 'category', 'hide_empty' => false]);
+      // Use custom taxonomy for Project Baldwin categories
+      $terms = get_terms(['taxonomy' => 'pb_category', 'hide_empty' => false]);
       foreach ($terms as $term) {
         echo '<label><input type="checkbox" name="pb_round_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
       }
@@ -304,6 +305,7 @@ class PB_Voting_Service {
       <p><label><strong>Categories</strong></label></p>
       <div class="pb-checkbox-list">
         <?php
+        // Use custom taxonomy for Project Baldwin categories
         foreach ($terms as $term) {
           echo '<label><input type="checkbox" name="pb_round_custom_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
         }
@@ -313,7 +315,8 @@ class PB_Voting_Service {
 
     <div class="pb-custom-by-manual" style="margin-top:10px;">
       <p><label><strong>Custom Participants</strong></label></p>
-      <div class="pb-checkbox-list">
+      <input type="text" id="pb-participant-search" placeholder="Search participants..." style="width:100%;margin-bottom:5px;">
+      <div class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
         <?php
         $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
         $manual = (array) get_post_meta($post->ID, '_pb_round_manual_participants', true);
@@ -376,6 +379,17 @@ class PB_Voting_Service {
   $(document).ready(function(){
     toggleFields();
     $('#pb_custom_select_toggle').trigger('change');
+  });
+</script>
+<script>
+(function($){
+  // Enable participant search filter
+  $('#pb-participant-search').on('input', function() {
+    var filter = $(this).val().toLowerCase();
+    $('.pb-custom-by-manual .pb-checkbox-list label').each(function() {
+      var text = $(this).text().toLowerCase();
+      $(this).toggle(text.indexOf(filter) > -1);
+    });
   });
 })(jQuery);
 </script>
