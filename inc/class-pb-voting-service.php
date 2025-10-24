@@ -153,6 +153,34 @@ class PB_Voting_Service {
             'auth_callback' => [__CLASS__, 'can_edit_post'],
             'sanitize_callback' => [__CLASS__, 'sanitize_int_array'],
         ]);
+
+        // Additional meta for enhanced admin controls and frontend awareness.
+        // - _pb_total_nominees: nomination round finalist count
+        // - _pb_total_places: number of places to display post-round
+        // - _pb_round_end: explicit end datetime, derived or manually set
+        register_post_meta('voting_round', '_pb_total_nominees', [
+            'type' => 'integer',
+            'single' => true,
+            'show_in_rest' => true,
+            'auth_callback' => [__CLASS__, 'can_edit_post'],
+            'sanitize_callback' => 'absint',
+        ]);
+
+        register_post_meta('voting_round', '_pb_total_places', [
+            'type' => 'integer',
+            'single' => true,
+            'show_in_rest' => true,
+            'auth_callback' => [__CLASS__, 'can_edit_post'],
+            'sanitize_callback' => 'absint',
+        ]);
+
+        register_post_meta('voting_round', '_pb_round_end', [
+            'type' => 'string',
+            'single' => true,
+            'show_in_rest' => true,
+            'auth_callback' => [__CLASS__, 'can_edit_post'],
+            'sanitize_callback' => 'sanitize_text_field',
+        ]);
     }
 
     // ============================================================
@@ -201,114 +229,157 @@ class PB_Voting_Service {
     }
 
     public static function render_voting_round_meta_box($post) {
-        // Renders the meta box UI for voting round configuration in the admin.
+        // ==========================
+        // VOTING ROUND META BOX UI
+        // ==========================
+        // This section structures the admin UI for nomination, final, and custom voting rounds.
+        // It includes timing, round-specific settings, and participant summaries.
+        // Contextual visibility is controlled via inline JS toggling.
+
         wp_nonce_field('pb_voting_round_meta', 'pb_voting_round_nonce');
+?>
+<div class="pb-voting-round-meta">
 
-        $state = get_post_meta($post->ID, self::ROUND_STATE_META, true) ?: 'custom';
-        $start = get_post_meta($post->ID, self::ROUND_START_META, true);
-        $duration = get_post_meta($post->ID, self::ROUND_DURATION_META, true);
-        $end = get_post_meta($post->ID, '_pb_round_end', true);
-        $selected_categories = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
-        $source_round = (int) get_post_meta($post->ID, self::ROUND_SOURCE_META, true);
-        $manual_participants = (array) get_post_meta($post->ID, self::ROUND_MANUAL_META, true);
-        $participants = (array) get_post_meta($post->ID, self::ROUND_PARTICIPANTS_META, true);
-        $round_ref = get_post_meta($post->ID, self::ROUND_REF_META, true);
+  <!-- === Section: Timing Fields === -->
+  <h3>Timing</h3>
+  <p><label for="pb_round_start"><strong>Start Date/Time</strong></label><br>
+    <input type="datetime-local" name="pb_round_start" id="pb_round_start" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_round_start', true)); ?>" class="widefat">
+  </p>
+  <p><label for="pb_round_end"><strong>End Date/Time</strong></label><br>
+    <input type="datetime-local" name="pb_round_end" id="pb_round_end" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_round_end', true)); ?>" class="widefat">
+  </p>
+  <p><label for="pb_round_duration"><strong>Duration (Days)</strong></label><br>
+    <?php
+      $start = strtotime(get_post_meta($post->ID, '_pb_round_start', true));
+      $end = strtotime(get_post_meta($post->ID, '_pb_round_end', true));
+      $duration = ($start && $end) ? round(($end - $start) / 86400, 2) : '';
+    ?>
+    <input type="number" name="pb_round_duration" id="pb_round_duration" value="<?php echo esc_attr($duration); ?>" class="widefat" readonly>
+    <em>This field is automatically calculated from Start and End times.</em>
+  </p>
 
-        $categories = get_terms([
-            'taxonomy' => 'pb_category',
-            'hide_empty' => false,
-        ]);
+  <!-- === Section: Round Type === -->
+  <h3>Round Type</h3>
+  <?php $round_state = get_post_meta($post->ID, '_pb_round_state', true); ?>
+  <label><input type="radio" name="pb_round_state" value="nomination" <?php checked($round_state, 'nomination'); ?>> Nomination</label><br>
+  <label><input type="radio" name="pb_round_state" value="final" <?php checked($round_state, 'final'); ?>> Final</label><br>
+  <label><input type="radio" name="pb_round_state" value="custom" <?php checked($round_state, 'custom'); ?>> Custom</label>
 
-        $rounds = get_posts([
-            'post_type' => 'voting_round',
-            'post_status' => ['publish', 'draft'],
-            'posts_per_page' => 50,
-            'orderby' => 'date',
-            'order' => 'DESC',
-            'exclude' => [$post->ID],
-        ]);
+  <!-- === Section: Nomination Fields === -->
+  <div class="pb-field-group pb-field-nomination" style="margin-top:10px;">
+    <h3>Nomination Round Settings</h3>
+    <p><label><strong>Categories</strong></label></p>
+    <div class="pb-checkbox-list">
+      <?php
+      $selected_cats = (array) get_post_meta($post->ID, '_pb_round_category_ids', true);
+      $terms = get_terms(['taxonomy' => 'category', 'hide_empty' => false]);
+      foreach ($terms as $term) {
+        echo '<label><input type="checkbox" name="pb_round_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
+      }
+      ?>
+    </div>
+    <p><label for="pb_total_nominees"><strong>Total Nominees</strong></label><br>
+      <input type="number" name="pb_total_nominees" id="pb_total_nominees" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_nominees', true)); ?>" min="1" step="1" class="small-text">
+    </p>
+  </div>
 
-        $eligible_posts = self::fetch_manual_participant_options();
-        ?>
-        <p>
-            <strong><?php esc_html_e('Round Type', 'projectbaldwin'); ?></strong><br />
-            <?php foreach (self::$round_states as $option) : ?>
-                <label style="margin-right:15px;">
-                    <input type="radio" name="pb_round_state" value="<?php echo esc_attr($option); ?>" <?php checked($state, $option); ?> />
-                    <?php echo esc_html(ucfirst($option)); ?>
-                </label>
-            <?php endforeach; ?>
-        </p>
+  <!-- === Section: Final Fields === -->
+  <div class="pb-field-group pb-field-final" style="margin-top:10px;">
+    <h3>Final Round Settings</h3>
+    <p><label for="pb_round_source"><strong>Final Round Source</strong></label><br>
+      <input type="text" name="pb_round_source" id="pb_round_source" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_round_source', true)); ?>" placeholder="Search or enter reference ID" class="widefat">
+    </p>
+    <p><label for="pb_total_places"><strong>Total Places</strong></label><br>
+      <input type="number" name="pb_total_places" id="pb_total_places" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_places', true)); ?>" min="1" step="1" class="small-text">
+    </p>
+  </div>
 
-        <p>
-            <label for="pb_round_start"><strong><?php esc_html_e('Start (date and time, site timezone)', 'projectbaldwin'); ?></strong></label><br />
-            <input type="datetime-local" class="widefat" name="pb_round_start" id="pb_round_start" value="<?php echo esc_attr($start); ?>" />
-        </p>
+  <!-- === Section: Custom Fields === -->
+  <div class="pb-field-group pb-field-custom" style="margin-top:10px;">
+    <h3>Custom Round Settings</h3>
+    <?php $custom_select_mode = get_post_meta($post->ID, '_pb_round_custom_select_mode', true); ?>
+    <label><input type="checkbox" id="pb_custom_select_toggle" name="pb_custom_select_mode" value="category" <?php checked($custom_select_mode, 'category'); ?>> Select by Category instead of Custom Participants</label>
 
-        <p>
-            <label for="pb_round_duration"><strong><?php esc_html_e('Duration (days)', 'projectbaldwin'); ?></strong></label><br />
-            <input type="number" class="widefat" name="pb_round_duration" id="pb_round_duration" value="<?php echo esc_attr($duration); ?>" min="1" step="1" />
-        </p>
-
-        <p>
-            <label for="pb_round_end"><strong><?php esc_html_e('End (date and time, site timezone)', 'projectbaldwin'); ?></strong></label><br />
-            <input type="datetime-local" class="widefat" name="pb_round_end" id="pb_round_end" value="<?php echo esc_attr($end); ?>" />
-        </p>
-
-        <div style="margin-bottom:20px;">
-            <p><strong><?php esc_html_e('Nomination Categories (up to 12)', 'projectbaldwin'); ?></strong></p>
-            <select name="pb_round_categories[]" multiple class="widefat" size="6">
-                <?php foreach ($categories as $term) : ?>
-                    <option value="<?php echo esc_attr($term->term_id); ?>" <?php selected(in_array($term->term_id, $selected_categories, true)); ?>>
-                        <?php echo esc_html($term->name); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <small><?php esc_html_e('Used only when Nomination is selected.', 'projectbaldwin'); ?></small>
-        </div>
-
-        <div style="margin-bottom:20px;">
-            <p><strong><?php esc_html_e('Final Round Source', 'projectbaldwin'); ?></strong></p>
-            <select name="pb_round_source" class="widefat">
-                <option value="">— <?php esc_html_e('Select previous round', 'projectbaldwin'); ?> —</option>
-                <?php foreach ($rounds as $round) : ?>
-                    <?php $ref = get_post_meta($round->ID, self::ROUND_PARTICIPANTS_META, true); ?>
-                    <option value="<?php echo esc_attr($round->ID); ?>" <?php selected($source_round, $round->ID); ?>>
-                        <?php echo esc_html(get_the_title($round)); ?><?php echo $ref ? ' (' . esc_html(count((array) $ref)) . ')' : ''; ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <small><?php esc_html_e('Used when Final is selected to pull top participants.', 'projectbaldwin'); ?></small>
-        </div>
-
-        <div style="margin-bottom:20px;">
-            <p><strong><?php esc_html_e('Custom Participant Override', 'projectbaldwin'); ?></strong></p>
-            <select name="pb_round_manual_participants[]" multiple class="widefat" size="8">
-                <?php foreach ($eligible_posts as $row) : ?>
-                    <option value="<?php echo esc_attr($row['ID']); ?>" <?php selected(in_array($row['ID'], $manual_participants, true)); ?>>
-                        <?php echo esc_html($row['label']); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <small><?php esc_html_e('Used when Custom is selected to define participants explicitly.', 'projectbaldwin'); ?></small>
-        </div>
-
-        <?php if (!empty($participants)) : ?>
-            <div class="notice notice-info" style="padding:12px;margin:0;background:#f0f6fc;border:1px solid #c8d7eb;">
-                <strong><?php esc_html_e('Cached Participants', 'projectbaldwin'); ?>:</strong>
-                <ul style="margin:8px 0 0 18px;">
-                    <?php foreach ($participants as $participant_id) :
-                        $participant = get_post($participant_id);
-                        if (!$participant) {
-                            continue;
-                        }
-                        echo '<li>' . esc_html(get_the_title($participant)) . ' (' . esc_html($participant->post_type) . ')</li>';
-                    endforeach; ?>
-                </ul>
-            </div>
-        <?php endif; ?>
-        <p><strong><?php esc_html_e('Round Reference', 'projectbaldwin'); ?>:</strong> <?php echo esc_html($round_ref ?: __('(will generate on save)', 'projectbaldwin')); ?></p>
+    <div class="pb-custom-by-category" style="margin-top:10px;">
+      <p><label><strong>Categories</strong></label></p>
+      <div class="pb-checkbox-list">
         <?php
+        foreach ($terms as $term) {
+          echo '<label><input type="checkbox" name="pb_round_custom_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
+        }
+        ?>
+      </div>
+    </div>
+
+    <div class="pb-custom-by-manual" style="margin-top:10px;">
+      <p><label><strong>Custom Participants</strong></label></p>
+      <div class="pb-checkbox-list">
+        <?php
+        $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
+        $manual = (array) get_post_meta($post->ID, '_pb_round_manual_participants', true);
+        foreach ($participants as $p) {
+          echo '<label><input type="checkbox" name="pb_round_manual_participants[]" value="' . esc_attr($p->ID) . '" ' . checked(in_array($p->ID, $manual), true, false) . '> ' . esc_html($p->post_title) . '</label><br>';
+        }
+        ?>
+      </div>
+    </div>
+
+    <p><label for="pb_total_places_custom"><strong>Total Places</strong></label><br>
+      <input type="number" name="pb_total_places" id="pb_total_places_custom" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_places', true)); ?>" min="1" step="1" class="small-text">
+    </p>
+  </div>
+
+  <!-- === Section: Selected Participants and Round Reference === -->
+  <h3>Summary</h3>
+  <div class="notice notice-info">
+    <p><strong>Round Reference:</strong> 
+      <?php
+      $ref = get_post_meta($post->ID, '_pb_round_ref', true);
+      echo $ref ? esc_html($ref) : '<em>Will generate on save</em>';
+      ?>
+    </p>
+    <p><strong>Selected Participants:</strong><br>
+      <?php
+      $cached = (array) get_post_meta($post->ID, '_pb_round_participants', true);
+      if (empty($cached)) {
+        echo '<em>No participants cached yet.</em>';
+      } else {
+        foreach ($cached as $pid) {
+          $p = get_post($pid);
+          echo '<span style="display:inline-block; margin-right:6px;">' . esc_html($p->post_title) . '</span>';
+        }
+      }
+      ?>
+    </p>
+  </div>
+</div>
+
+<script>
+(function($){
+  function toggleFields() {
+    var val = $('input[name="pb_round_state"]:checked').val();
+    $('.pb-field-group').hide();
+    if(val === 'nomination') $('.pb-field-nomination').show();
+    if(val === 'final') $('.pb-field-final').show();
+    if(val === 'custom') $('.pb-field-custom').show();
+  }
+  $(document).on('change', 'input[name="pb_round_state"]', toggleFields);
+  $(document).on('change', '#pb_custom_select_toggle', function(){
+    if($(this).is(':checked')) {
+      $('.pb-custom-by-category').show();
+      $('.pb-custom-by-manual').hide();
+    } else {
+      $('.pb-custom-by-category').hide();
+      $('.pb-custom-by-manual').show();
+    }
+  });
+  $(document).ready(function(){
+    toggleFields();
+    $('#pb_custom_select_toggle').trigger('change');
+  });
+})(jQuery);
+</script>
+<?php
     }
 
     // ============================================================
@@ -398,6 +469,14 @@ class PB_Voting_Service {
         update_post_meta($post_id, self::ROUND_SOURCE_META, $source_round);
         update_post_meta($post_id, self::ROUND_MANUAL_META, $manual);
         update_post_meta($post_id, self::ROUND_REF_META, $round_ref);
+
+        // Save total nominees and places for nomination/final/custom rounds.
+        if (isset($_POST['pb_total_nominees'])) {
+            update_post_meta($post_id, '_pb_total_nominees', absint($_POST['pb_total_nominees']));
+        }
+        if (isset($_POST['pb_total_places'])) {
+            update_post_meta($post_id, '_pb_total_places', absint($_POST['pb_total_places']));
+        }
 
         $participants = self::calculate_participants($state, $categories, $manual, $source_round);
         update_post_meta($post_id, self::ROUND_PARTICIPANTS_META, $participants);
