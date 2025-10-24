@@ -239,6 +239,29 @@ class PB_Voting_Service {
         wp_nonce_field('pb_voting_round_meta', 'pb_voting_round_nonce');
         $pb_rest_nonce = wp_create_nonce('wp_rest');
         $pb_rest_root  = rest_url('pb/v1/');
+
+        $round_state          = get_post_meta($post->ID, self::ROUND_STATE_META, true);
+        $selected_cats        = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
+        $manual_participants  = (array) get_post_meta($post->ID, self::ROUND_MANUAL_META, true);
+        $cached_participants  = array_map('intval', (array) get_post_meta($post->ID, self::ROUND_PARTICIPANTS_META, true));
+        $manual_participant_options = get_posts([
+            'post_type'      => ['business', 'person', 'event'],
+            'post_status'    => ['publish', 'draft'],
+            'posts_per_page' => -1,
+            'orderby'        => 'title',
+            'order'          => 'ASC',
+        ]);
+
+        $selected_participant_ids = $cached_participants;
+        if (empty($selected_participant_ids)) {
+            if ($round_state === 'custom' && !empty($manual_participants)) {
+                $selected_participant_ids = $manual_participants;
+            } elseif (!empty($selected_cats)) {
+                $selected_participant_ids = self::fetch_nomination_participants($selected_cats);
+            }
+        }
+        $selected_participant_ids   = array_values(array_unique(array_map('intval', $selected_participant_ids)));
+        $selected_participant_posts = self::get_participant_posts($selected_participant_ids);
 ?>
 <div class="pb-voting-round-meta">
 
@@ -262,7 +285,6 @@ class PB_Voting_Service {
 
   <!-- === Section: Round Type === -->
   <h3>Round Type</h3>
-  <?php $round_state = get_post_meta($post->ID, '_pb_round_state', true); ?>
   <label><input type="radio" name="pb_round_state" value="nomination" <?php checked($round_state, 'nomination'); ?>> Nomination</label><br>
   <label><input type="radio" name="pb_round_state" value="final" <?php checked($round_state, 'final'); ?>> Final</label><br>
   <label><input type="radio" name="pb_round_state" value="custom" <?php checked($round_state, 'custom'); ?>> Custom</label>
@@ -273,7 +295,6 @@ class PB_Voting_Service {
     <p><label><strong>Categories</strong></label></p>
     <div class="pb-checkbox-list">
       <?php
-      $selected_cats = (array) get_post_meta($post->ID, '_pb_round_category_ids', true);
       // Use custom taxonomy for Project Baldwin categories
       $terms = get_terms(['taxonomy' => 'pb_category', 'hide_empty' => false]);
       foreach ($terms as $term) {
@@ -318,12 +339,14 @@ class PB_Voting_Service {
     <div class="pb-custom-by-manual" style="margin-top:10px;">
       <p><label><strong>Custom Participants</strong></label></p>
       <input type="text" id="pb-participant-search" placeholder="Search participants..." style="width:100%;margin-bottom:5px;">
-      <div id="pb-selected-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
+      <div id="pb-manual-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
         <?php
-        $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
-        $manual = (array) get_post_meta($post->ID, '_pb_round_manual_participants', true);
-        foreach ($participants as $p) {
-          echo '<label><input type="checkbox" name="pb_round_manual_participants[]" value="' . esc_attr($p->ID) . '" ' . checked(in_array($p->ID, $manual), true, false) . '> ' . esc_html($p->post_title) . '</label><br>';
+        foreach ($manual_participant_options as $participant_post) {
+            $is_selected = in_array($participant_post->ID, $manual_participants, true);
+            echo '<label><input type="checkbox" name="pb_round_manual_participants[]" value="' . esc_attr($participant_post->ID) . '" ' . checked($is_selected, true, false) . '> ' . esc_html($participant_post->post_title) . '</label><br>';
+        }
+        if (empty($manual_participant_options)) {
+            echo '<em>' . esc_html__('No participants available to select.', 'projectbaldwin') . '</em>';
         }
         ?>
       </div>
@@ -350,16 +373,21 @@ class PB_Voting_Service {
     ?>
   </p>
   <p><strong>Selected Participants:</strong></p>
-  <div class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
-    <?php
-    // Always show all eligible participants, pre-checking those in the current cached list
-    $cached = (array) get_post_meta($post->ID, '_pb_round_participants', true);
-    $participants = get_posts(['post_type' => ['business','person','event'], 'posts_per_page' => -1]);
-    foreach ($participants as $p) {
-      $checked = in_array($p->ID, $cached);
-      echo '<label><input type="checkbox" name="pb_round_participants[]" value="' . esc_attr($p->ID) . '" ' . checked($checked, true, false) . '> ' . esc_html($p->post_title) . '</label><br>';
-    }
-    ?>
+  <div id="pb-selected-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
+    <?php if (!empty($selected_participant_posts)) : ?>
+        <?php foreach ($selected_participant_posts as $participant_post) : ?>
+            <label>
+                <input type="checkbox"
+                       name="pb_round_participants[]"
+                       value="<?php echo esc_attr($participant_post->ID); ?>"
+                       <?php checked(in_array($participant_post->ID, $selected_participant_ids, true), true); ?>>
+                <?php echo esc_html(get_the_title($participant_post)); ?>
+                <span class="description">(<?php echo esc_html($participant_post->post_type); ?>)</span>
+            </label><br>
+        <?php endforeach; ?>
+    <?php else : ?>
+        <em><?php esc_html_e('No participants selected yet. Save or refresh to populate.', 'projectbaldwin'); ?></em>
+    <?php endif; ?>
   </div>
   <p><em>Use this list to verify or adjust cached participants before publishing.</em></p>
 
@@ -370,21 +398,55 @@ class PB_Voting_Service {
   var restNonce = <?php echo wp_json_encode( $pb_rest_nonce ); ?>;
   var roundId = <?php echo (int) $post->ID; ?>;
 
-  function renderSelectedParticipants(ids) {
+  function renderSelectedParticipants(payload) {
     var box = $('#pb-selected-participants');
     if (!box.length) return;
-    if (!Array.isArray(ids) || !ids.length) {
+
+    var ids = [];
+    var details = [];
+
+    if (Array.isArray(payload)) {
+      ids = payload;
+    } else if (payload) {
+      if (Array.isArray(payload.participants)) {
+        ids = payload.participants;
+      }
+      if (Array.isArray(payload.details)) {
+        details = payload.details;
+      }
+    }
+
+    if (!ids.length) {
       box.html('<em>No participants cached yet.</em>');
       return;
     }
+
+    var detailMap = {};
+    details.forEach(function(detail){
+      if (detail && detail.ID) {
+        detailMap[detail.ID] = detail;
+      }
+    });
+
     var html = '';
     ids.forEach(function(pid){
-      var $label = $('input[name="pb_round_manual_participants[]"][value="'+pid+'"]').closest('label');
-      var labelText = $label.length ? $label.text().trim() : ('ID ' + pid);
-      html += '<label><input type="checkbox" name="pb_round_participants[]" value="'+pid+'" checked> '
-              + $('<div/>').text(labelText).html()
-              + '</label><br>';
+      var detail = detailMap[pid] || null;
+      var labelText = detail && detail.title ? detail.title : null;
+      var typeText = detail && detail.type ? detail.type : '';
+      if (!labelText) {
+        var $label = $('input[name="pb_round_manual_participants[]"][value="'+pid+'"]').closest('label');
+        labelText = $label.length ? $label.text().trim() : ('ID ' + pid);
+      }
+      var safeLabel = $('<div/>').text(labelText).html();
+      var safeType = typeText ? $('<div/>').text(typeText).html() : '';
+
+      html += '<label><input type="checkbox" name="pb_round_participants[]" value="'+pid+'" checked> ' + safeLabel;
+      if (safeType) {
+        html += ' <span class="description">(' + safeType + ')</span>';
+      }
+      html += '</label><br>';
     });
+
     box.html(html);
   }
 
@@ -402,8 +464,8 @@ class PB_Voting_Service {
       if (!res.ok) throw new Error('Refresh failed');
       return res.json();
     }).then(function(data){
-      if (data && Array.isArray(data.participants)) {
-        renderSelectedParticipants(data.participants);
+      if (data) {
+        renderSelectedParticipants(data);
       }
     }).catch(function(err){
       console.error(err);
@@ -658,6 +720,40 @@ private static function fetch_nomination_participants(array $categories) {
         }
 
         return $options;
+    }
+
+    private static function get_participant_posts(array $participant_ids) {
+        $participant_ids = array_values(array_unique(array_filter(array_map('intval', $participant_ids))));
+        if (empty($participant_ids)) {
+            return [];
+        }
+
+        $post_types = self::get_available_votable_types();
+        if (empty($post_types)) {
+            return [];
+        }
+
+        return get_posts([
+            'post_type'      => $post_types,
+            'post_status'    => ['publish', 'draft'],
+            'posts_per_page' => count($participant_ids),
+            'post__in'       => $participant_ids,
+            'orderby'        => 'post__in',
+        ]);
+    }
+
+    private static function format_participant_details(array $participant_ids) {
+        $posts = self::get_participant_posts($participant_ids);
+        $details = [];
+        foreach ($posts as $participant) {
+            $details[] = [
+                'ID'    => $participant->ID,
+                'title' => get_the_title($participant),
+                'type'  => $participant->post_type,
+            ];
+        }
+
+        return $details;
     }
 
     // ============================================================
@@ -965,8 +1061,9 @@ private static function fetch_nomination_participants(array $categories) {
         update_post_meta($round_id, self::ROUND_PARTICIPANTS_META, $participants);
 
         return rest_ensure_response([
-        'round_id'     => $round_id,
-        'participants' => array_map('intval', $participants),
+            'round_id'     => $round_id,
+            'participants' => array_map('intval', $participants),
+            'details'      => self::format_participant_details($participants),
         ]);
     } 
 
