@@ -37,6 +37,8 @@ class PB_Voting_Service {
     private const ROUND_CATEGORY_META = '_pb_round_category_ids';
     private const ROUND_SOURCE_META = '_pb_round_source';
     private const ROUND_MANUAL_META = '_pb_round_manual_participants';
+    private const ROUND_CUSTOM_MODE_META = '_pb_round_custom_select_mode';
+    private const ROUND_CUSTOM_CATEGORY_META = '_pb_round_custom_category_ids';
     private const ROUND_PARTICIPANTS_META = '_pb_round_participants';
 
     private static $eligible_post_types = [
@@ -155,6 +157,22 @@ class PB_Voting_Service {
             'sanitize_callback' => [__CLASS__, 'sanitize_int_array'],
         ]);
 
+        register_post_meta('voting_round', self::ROUND_CUSTOM_MODE_META, [
+            'type' => 'string',
+            'single' => true,
+            'show_in_rest' => true,
+            'auth_callback' => [__CLASS__, 'can_edit_post'],
+            'sanitize_callback' => 'sanitize_text_field',
+        ]);
+
+        register_post_meta('voting_round', self::ROUND_CUSTOM_CATEGORY_META, [
+            'type' => 'array',
+            'single' => true,
+            'show_in_rest' => true,
+            'auth_callback' => [__CLASS__, 'can_edit_post'],
+            'sanitize_callback' => [__CLASS__, 'sanitize_int_array'],
+        ]);
+
         // Additional meta for enhanced admin controls and frontend awareness.
         // - _pb_total_nominees: nomination round finalist count
         // - _pb_total_places: number of places to display post-round
@@ -248,7 +266,8 @@ class PB_Voting_Service {
         $is_nomination = ($round_state === 'nomination');
         $is_final      = ($round_state === 'final');
         $is_custom     = ($round_state === 'custom');
-        $selected_cats        = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
+        $selected_nomination_cats = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
+        $selected_custom_cats     = (array) get_post_meta($post->ID, self::ROUND_CUSTOM_CATEGORY_META, true);
         $manual_participants  = (array) get_post_meta($post->ID, self::ROUND_MANUAL_META, true);
         $cached_participants  = array_map('intval', (array) get_post_meta($post->ID, self::ROUND_PARTICIPANTS_META, true));
 
@@ -270,10 +289,12 @@ class PB_Voting_Service {
 
         $selected_participant_ids = $cached_participants;
         if (empty($selected_participant_ids)) {
-            if ($round_state === 'custom' && !empty($manual_participants)) {
+            if ($round_state === 'custom' && $custom_select_mode === 'category' && !empty($selected_custom_cats)) {
+                $selected_participant_ids = self::fetch_nomination_participants($selected_custom_cats);
+            } elseif ($round_state === 'custom' && !empty($manual_participants)) {
                 $selected_participant_ids = $manual_participants;
-            } elseif (!empty($selected_cats)) {
-                $selected_participant_ids = self::fetch_nomination_participants($selected_cats);
+            } elseif (!empty($selected_nomination_cats)) {
+                $selected_participant_ids = self::fetch_nomination_participants($selected_nomination_cats);
             }
         }
         $selected_participant_ids   = array_values(array_unique(array_map('intval', $selected_participant_ids)));
@@ -322,7 +343,7 @@ class PB_Voting_Service {
       // Use custom taxonomy for Project Baldwin categories
       $terms = get_terms(['taxonomy' => 'pb_category', 'hide_empty' => false]);
       foreach ($terms as $term) {
-        echo '<label><input type="checkbox" name="pb_round_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
+        echo '<label><input type="checkbox" name="pb_round_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_nomination_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
       }
       ?>
     </div>
@@ -354,7 +375,7 @@ class PB_Voting_Service {
         <?php
         // Use custom taxonomy for Project Baldwin categories
         foreach ($terms as $term) {
-          echo '<label><input type="checkbox" name="pb_round_custom_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
+          echo '<label><input type="checkbox" name="pb_round_custom_categories[]" value="' . esc_attr($term->term_id) . '" ' . checked(in_array($term->term_id, $selected_custom_cats), true, false) . '> ' . esc_html($term->name) . '</label><br>';
         }
         ?>
       </div>
@@ -646,7 +667,9 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
         $duration = isset($_POST['pb_round_duration']) ? intval($_POST['pb_round_duration']) : 0;
         $end = isset($_POST['pb_round_end']) ? sanitize_text_field($_POST['pb_round_end']) : '';
         $categories = isset($_POST['pb_round_categories']) ? self::sanitize_int_array($_POST['pb_round_categories']) : [];
+        $custom_categories = isset($_POST['pb_round_custom_categories']) ? self::sanitize_int_array($_POST['pb_round_custom_categories']) : [];
         $manual = isset($_POST['pb_round_manual_participants']) ? self::sanitize_int_array($_POST['pb_round_manual_participants']) : [];
+        $custom_mode = isset($_POST['pb_custom_select_mode']) && $_POST['pb_custom_select_mode'] === 'category' ? 'category' : '';
         $source_round = isset($_POST['pb_round_source']) ? (int) $_POST['pb_round_source'] : 0;
 
         if (count($categories) > 12) {
@@ -681,6 +704,8 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
         update_post_meta($post_id, self::ROUND_SOURCE_META, $source_round);
         update_post_meta($post_id, self::ROUND_MANUAL_META, $manual);
         update_post_meta($post_id, self::ROUND_REF_META, $round_ref);
+        update_post_meta($post_id, self::ROUND_CUSTOM_MODE_META, $custom_mode);
+        update_post_meta($post_id, self::ROUND_CUSTOM_CATEGORY_META, $custom_categories);
 
         // Save total nominees and places for nomination/final/custom rounds.
         if (isset($_POST['pb_total_nominees'])) {
@@ -690,7 +715,7 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
             update_post_meta($post_id, '_pb_total_places', absint($_POST['pb_total_places']));
         }
 
-        $participants = self::calculate_participants($state, $categories, $manual, $source_round);
+        $participants = self::calculate_participants($state, $categories, $manual, $source_round, $custom_mode, $custom_categories);
         update_post_meta($post_id, self::ROUND_PARTICIPANTS_META, $participants);
 
         // Save manually adjusted participant selections from the always-visible section.
@@ -705,7 +730,7 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
     // ============================================================
     // Determines which posts participate in a round, based on round type.
 
-    private static function calculate_participants($state, array $categories, array $manual, $source_round_id) {
+    private static function calculate_participants($state, array $categories, array $manual, $source_round_id, $custom_mode = '', array $custom_categories = []) {
         // Returns an array of participant post IDs for the round.
         switch ($state) {
             case 'nomination':
@@ -714,6 +739,9 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
                 return self::fetch_finalists($source_round_id);
             case 'custom':
             default:
+                if ($custom_mode === 'category') {
+                    return self::fetch_nomination_participants($custom_categories);
+                }
                 return array_values(array_unique(array_filter($manual)));
         }
     }
@@ -1154,8 +1182,10 @@ private static function fetch_nomination_participants(array $categories) {
         $categories   = (array) get_post_meta($round_id, self::ROUND_CATEGORY_META, true);
         $manual       = (array) get_post_meta($round_id, self::ROUND_MANUAL_META, true);
         $source_round = (int) get_post_meta($round_id, self::ROUND_SOURCE_META, true);
+        $custom_mode  = get_post_meta($round_id, self::ROUND_CUSTOM_MODE_META, true);
+        $custom_categories = (array) get_post_meta($round_id, self::ROUND_CUSTOM_CATEGORY_META, true);
 
-        $participants = self::calculate_participants($state ?: 'custom', $categories, $manual, $source_round);
+        $participants = self::calculate_participants($state ?: 'custom', $categories, $manual, $source_round, $custom_mode, $custom_categories);
         update_post_meta($round_id, self::ROUND_PARTICIPANTS_META, $participants);
 
         $round_ref = get_post_meta($round_id, self::ROUND_REF_META, true);
