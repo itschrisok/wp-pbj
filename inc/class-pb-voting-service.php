@@ -278,6 +278,14 @@ class PB_Voting_Service {
         }
         $selected_participant_ids   = array_values(array_unique(array_map('intval', $selected_participant_ids)));
         $selected_participant_posts = self::get_participant_posts($selected_participant_ids);
+
+        $round_ref = get_post_meta($post->ID, self::ROUND_REF_META, true);
+        $participant_votes = [];
+        $participant_vote_sum = 0;
+        if ($round_ref && !empty($selected_participant_ids)) {
+            $participant_votes = self::get_vote_counts_for_posts($round_ref, $selected_participant_ids);
+            $participant_vote_sum = array_sum($participant_votes);
+        }
 ?>
 <div class="pb-voting-round-meta">
 
@@ -391,21 +399,27 @@ class PB_Voting_Service {
   </h3>
   <p><strong>Round Reference:</strong>
     <?php
-    $ref = get_post_meta($post->ID, '_pb_round_ref', true);
-    echo $ref ? esc_html($ref) : '<em>Will generate on save</em>';
+    echo $round_ref ? esc_html($round_ref) : '<em>Will generate on save</em>';
     ?>
   </p>
+  <?php if ($round_ref) : ?>
+      <p class="pb-vote-summary"><strong><?php esc_html_e('Tracked Votes:', 'projectbaldwin'); ?></strong> <span class="pb-vote-total"><?php echo esc_html(number_format_i18n($participant_vote_sum)); ?></span></p>
+  <?php endif; ?>
   <p><strong>Selected Participants:</strong></p>
   <div id="pb-selected-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
     <?php if (!empty($selected_participant_posts)) : ?>
         <?php foreach ($selected_participant_posts as $participant_post) : ?>
+            <?php
+            $votes_for_post = isset($participant_votes[$participant_post->ID]) ? (int) $participant_votes[$participant_post->ID] : 0;
+            $vote_label = sprintf(_n('%s vote', '%s votes', $votes_for_post, 'projectbaldwin'), number_format_i18n($votes_for_post));
+            ?>
             <label>
                 <input type="checkbox"
                        name="pb_round_participants[]"
                        value="<?php echo esc_attr($participant_post->ID); ?>"
                        <?php checked(in_array($participant_post->ID, $selected_participant_ids, true), true); ?>>
                 <?php echo esc_html(get_the_title($participant_post)); ?>
-                <span class="description">(<?php echo esc_html($participant_post->post_type); ?>)</span>
+                <span class="description">(<?php echo esc_html($participant_post->post_type); ?>, <?php echo esc_html($vote_label); ?>)</span>
             </label><br>
         <?php endforeach; ?>
     <?php else : ?>
@@ -417,9 +431,11 @@ class PB_Voting_Service {
 <script>
 // === Admin: Refresh participants via REST ===
 (function($){
-  var restRoot = <?php echo wp_json_encode( $pb_rest_root ); ?>;
-  var restNonce = <?php echo wp_json_encode( $pb_rest_nonce ); ?>;
-  var roundId = <?php echo (int) $post->ID; ?>;
+var restRoot = <?php echo wp_json_encode( $pb_rest_root ); ?>;
+var restNonce = <?php echo wp_json_encode( $pb_rest_nonce ); ?>;
+var roundId = <?php echo (int) $post->ID; ?>;
+var votesLabel = <?php echo wp_json_encode(__('votes', 'projectbaldwin')); ?>;
+var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?>;
 
   function renderSelectedParticipants(payload) {
     var box = $('#pb-selected-participants');
@@ -445,32 +461,57 @@ class PB_Voting_Service {
     }
 
     var detailMap = {};
+    var voteMap = {};
     details.forEach(function(detail){
       if (detail && detail.ID) {
         detailMap[detail.ID] = detail;
       }
     });
+    if (payload && payload.votes) {
+      voteMap = payload.votes;
+    }
 
     var html = '';
     ids.forEach(function(pid){
       var detail = detailMap[pid] || null;
       var labelText = detail && detail.title ? detail.title : null;
       var typeText = detail && detail.type ? detail.type : '';
+      var votes = 0;
+      if (voteMap && typeof voteMap[pid] !== 'undefined') {
+        votes = parseInt(voteMap[pid], 10);
+      }
       if (!labelText) {
         var $label = $('input[name="pb_round_manual_participants[]"][value="'+pid+'"]').closest('label');
         labelText = $label.length ? $label.text().trim() : ('ID ' + pid);
       }
       var safeLabel = $('<div/>').text(labelText).html();
       var safeType = typeText ? $('<div/>').text(typeText).html() : '';
+      var voteText = votes ? votes.toLocaleString() + ' ' + (votes === 1 ? voteLabelSingle : votesLabel) : '0 ' + votesLabel;
 
       html += '<label><input type="checkbox" name="pb_round_participants[]" value="'+pid+'" checked> ' + safeLabel;
       if (safeType) {
-        html += ' <span class="description">(' + safeType + ')</span>';
+        html += ' <span class="description">(' + safeType + ', ' + voteText + ')</span>';
+      } else {
+        html += ' <span class="description">(' + voteText + ')</span>';
       }
       html += '</label><br>';
     });
 
     box.html(html);
+
+    var totalVotes = 0;
+    for (var voteKey in voteMap) {
+      if (Object.prototype.hasOwnProperty.call(voteMap, voteKey)) {
+        var parsed = parseInt(voteMap[voteKey], 10);
+        if (!isNaN(parsed)) {
+          totalVotes += parsed;
+        }
+      }
+    }
+    var summaryValue = document.querySelector('.pb-vote-summary .pb-vote-total');
+    if (summaryValue) {
+      summaryValue.textContent = totalVotes.toLocaleString();
+    }
   }
 
   $('#pb-refresh-participants').on('click', function(){
@@ -783,6 +824,33 @@ private static function fetch_nomination_participants(array $categories) {
         return $details;
     }
 
+    private static function get_vote_counts_for_posts($round_ref, array $participant_ids) {
+        $participant_ids = array_values(array_unique(array_filter(array_map('intval', $participant_ids))));
+        if (!$round_ref || empty($participant_ids)) {
+            return [];
+        }
+
+        $post_refs = [];
+        foreach ($participant_ids as $pid) {
+            $ref = get_post_meta($pid, self::REF_META_KEY, true);
+            if ($ref) {
+                $post_refs[$pid] = $ref;
+            }
+        }
+
+        if (empty($post_refs)) {
+            return [];
+        }
+
+        $totals = self::get_vote_totals($round_ref, array_values($post_refs));
+        $counts = [];
+        foreach ($post_refs as $pid => $ref) {
+            $counts[$pid] = isset($totals[$ref]) ? (int) $totals[$ref] : 0;
+        }
+
+        return $counts;
+    }
+
     // ============================================================
     // Helper Functions & Utilities
     // ============================================================
@@ -1090,10 +1158,18 @@ private static function fetch_nomination_participants(array $categories) {
         $participants = self::calculate_participants($state ?: 'custom', $categories, $manual, $source_round);
         update_post_meta($round_id, self::ROUND_PARTICIPANTS_META, $participants);
 
+        $round_ref = get_post_meta($round_id, self::ROUND_REF_META, true);
+        $vote_counts = $round_ref ? self::get_vote_counts_for_posts($round_ref, $participants) : [];
+        $vote_counts_response = [];
+        foreach ($vote_counts as $pid => $count) {
+            $vote_counts_response[(string) $pid] = $count;
+        }
+
         return rest_ensure_response([
             'round_id'     => $round_id,
             'participants' => array_map('intval', $participants),
             'details'      => self::format_participant_details($participants),
+            'votes'        => $vote_counts_response,
         ]);
     } 
 
@@ -1385,6 +1461,10 @@ private static function fetch_nomination_participants(array $categories) {
             .pb-col-select input[type="checkbox"] {
                 margin:0 auto;
                 display:block;
+            }
+            .pb-vote-summary {
+                margin:0 0 10px;
+                font-size:13px;
             }
         </style>
         <script>
