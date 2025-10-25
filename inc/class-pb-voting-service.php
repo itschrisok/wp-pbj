@@ -290,11 +290,11 @@ class PB_Voting_Service {
         $selected_participant_ids = $cached_participants;
         if (empty($selected_participant_ids)) {
             if ($round_state === 'custom' && $custom_select_mode === 'category' && !empty($selected_custom_cats)) {
-                $selected_participant_ids = self::fetch_nomination_participants($selected_custom_cats);
+                $selected_participant_ids = self::fetch_nomination_participants($selected_custom_cats, false);
             } elseif ($round_state === 'custom' && !empty($manual_participants)) {
                 $selected_participant_ids = $manual_participants;
             } elseif (!empty($selected_nomination_cats)) {
-                $selected_participant_ids = self::fetch_nomination_participants($selected_nomination_cats);
+                $selected_participant_ids = self::fetch_nomination_participants($selected_nomination_cats, true);
             }
         }
         $selected_participant_ids   = array_values(array_unique(array_map('intval', $selected_participant_ids)));
@@ -734,44 +734,54 @@ var voteLabelSingle = <?php echo wp_json_encode(__('vote', 'projectbaldwin')); ?
         // Returns an array of participant post IDs for the round.
         switch ($state) {
             case 'nomination':
-                return self::fetch_nomination_participants($categories);
+                return self::fetch_nomination_participants($categories, true);
             case 'final':
                 return self::fetch_finalists($source_round_id);
             case 'custom':
             default:
                 if ($custom_mode === 'category') {
-                    return self::fetch_nomination_participants($custom_categories);
+                    return self::fetch_nomination_participants($custom_categories, false);
                 }
                 return array_values(array_unique(array_filter($manual)));
         }
     }
+    private static function fetch_nomination_participants(array $categories, $require_voting_flag = true) {
+        if (empty($categories)) {
+            return [];
+        }
 
-private static function fetch_nomination_participants(array $categories) {
-    if (empty($categories)) return [];
+        $taxonomy = taxonomy_exists('pb_category') ? 'pb_category' :
+                    (taxonomy_exists('connections') ? 'connections' : '');
+        if (!$taxonomy) {
+            return [];
+        }
 
-    $taxonomy = taxonomy_exists('pb_category') ? 'pb_category' :
-                (taxonomy_exists('connections') ? 'connections' : '');
-    if (!$taxonomy) return [];
+        $post_types = self::get_available_votable_types();
+        if (empty($post_types)) {
+            return [];
+        }
 
-    $post_types = self::get_available_votable_types();
-    if (empty($post_types)) return [];
+        $query_args = [
+            'post_type'      => $post_types,
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'tax_query'      => [[
+                'taxonomy' => $taxonomy,
+                'field'    => 'term_id',
+                'terms'    => $categories,
+            ]],
+        ];
 
-    $query = new WP_Query([
-        'post_type'      => $post_types,
-        'post_status'    => 'publish',
-        'meta_key'       => self::IN_VOTING_META_KEY,
-        'meta_value'     => '1',
-        'posts_per_page' => -1,
-        'fields'         => 'ids',
-        'tax_query'      => [[
-            'taxonomy' => $taxonomy,
-            'field'    => 'term_id',
-            'terms'    => $categories,
-        ]],
-    ]);
+        if ($require_voting_flag) {
+            $query_args['meta_key']   = self::IN_VOTING_META_KEY;
+            $query_args['meta_value'] = '1';
+        }
 
-    return $query->posts ?: [];
-}
+        $query = new WP_Query($query_args);
+
+        return $query->posts ?: [];
+    }
 
     private static function fetch_finalists($source_round_id) {
         // Returns top finalist post IDs from a previous round.
