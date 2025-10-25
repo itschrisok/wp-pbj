@@ -66,6 +66,7 @@ class PB_Voting_Service {
         add_action('rest_api_init', [__CLASS__, 'register_rest_routes']);
         add_action('admin_menu', [__CLASS__, 'register_admin_pages']);
         add_action('admin_post_pb_end_voting_round', [__CLASS__, 'handle_end_voting_round']);
+        add_action('admin_post_pb_bulk_voting_round_action', [__CLASS__, 'handle_bulk_voting_round_action']);
     }
 
     // ============================================================
@@ -870,11 +871,14 @@ private static function fetch_nomination_participants(array $categories) {
             $votes = $record['votes'] ?? 0;
             // Set last_vote_at to null if not present or empty
             $last_vote_at = !empty($record['last_vote_at']) ? $record['last_vote_at'] : null;
+            $post_obj = get_post($pid);
             $rank_rows[] = [
                 'post_id' => $pid,
                 'post_ref' => $ref,
                 'votes' => $votes,
                 'last_vote_at' => $last_vote_at,
+                'post_title' => $post_obj ? get_the_title($post_obj) : '',
+                'post_type' => $post_obj ? $post_obj->post_type : '',
             ];
         }
         // Sort descending by votes, then by post_id for stable order
@@ -1238,6 +1242,8 @@ private static function fetch_nomination_participants(array $categories) {
             'meta_key'    => self::ROUND_START_META,
             'order'       => 'ASC',
         ]);
+        $rest_nonce = wp_create_nonce('wp_rest');
+        $rest_root  = rest_url('pb/v1/');
 
         echo '<div class="wrap"><h1>' . esc_html__('Voting Rounds Overview', 'projectbaldwin') . '</h1>';
 
@@ -1252,8 +1258,32 @@ private static function fetch_nomination_participants(array $categories) {
             return;
         }
 
-        echo '<table class="widefat fixed striped">';
-        echo '<thead><tr><th>Title</th><th>Start</th><th>End</th><th>Status</th><th>Time Remaining</th><th>Actions</th></tr></thead><tbody>';
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="pb-rounds-bulk-form">
+            <?php wp_nonce_field('pb_bulk_rounds', 'pb_bulk_nonce'); ?>
+            <input type="hidden" name="action" value="pb_bulk_voting_round_action" />
+            <div class="pb-bulk-controls">
+                <select name="pb_bulk_action" required>
+                    <option value=""><?php esc_html_e('Bulk actions', 'projectbaldwin'); ?></option>
+                    <option value="end_now"><?php esc_html_e('End selected now', 'projectbaldwin'); ?></option>
+                    <option value="archive"><?php esc_html_e('Archive (set to draft)', 'projectbaldwin'); ?></option>
+                </select>
+                <button type="submit" class="button"><?php esc_html_e('Apply', 'projectbaldwin'); ?></button>
+            </div>
+            <table class="widefat fixed striped pb-rounds-table">
+                <thead>
+                    <tr>
+                        <th class="pb-col-select"><input type="checkbox" class="pb-select-all" /></th>
+                        <th><?php esc_html_e('Title', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('Start', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('End', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('Status', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('Time Remaining', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('Live Votes & Leaders', 'projectbaldwin'); ?></th>
+                        <th><?php esc_html_e('Actions', 'projectbaldwin'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
 
         foreach ($rounds as $round) {
             $start = strtotime(get_post_meta($round->ID, self::ROUND_START_META, true));
@@ -1264,36 +1294,158 @@ private static function fetch_nomination_participants(array $categories) {
             } else {
                 $end = $start + ($duration * DAY_IN_SECONDS);
             }
+            $round_ref = get_post_meta($round->ID, self::ROUND_REF_META, true);
 
             // All display logic uses $end above
             if ($now < $start) {
-                $status = '<span style="color:#e0a800; font-weight:bold;">Upcoming</span>';
+                $status = '<span class="pb-status-badge pb-status-upcoming">' . esc_html__('Upcoming', 'projectbaldwin') . '</span>';
                 $time_remaining = 'Starts in ' . human_time_diff($now, $start);
             } elseif ($now >= $start && $now <= $end) {
-                $status = '<span style="color:green; font-weight:bold;">Active</span>';
+                $status = '<span class="pb-status-badge pb-status-active">' . esc_html__('Active', 'projectbaldwin') . '</span>';
                 $time_remaining = human_time_diff($now, $end) . ' left';
             } else {
-                $status = '<span style="color:red; font-weight:bold;">Expired</span>';
+                $status = '<span class="pb-status-badge pb-status-expired">' . esc_html__('Expired', 'projectbaldwin') . '</span>';
                 $time_remaining = 'Ended ' . human_time_diff($end, $now) . ' ago';
             }
 
-            echo '<tr>';
+            $row_attrs = '';
+            if ($round_ref) {
+                $row_attrs = ' data-round-ref="' . esc_attr($round_ref) . '" data-round-id="' . esc_attr($round->ID) . '"';
+            }
+
+            echo '<tr class="pb-round-row"' . $row_attrs . '>';
+            echo '<td class="pb-col-select"><input type="checkbox" name="round_ids[]" value="' . esc_attr($round->ID) . '" /></td>';
             echo '<td><a href="' . esc_url(get_edit_post_link($round->ID)) . '">' . esc_html(get_the_title($round)) . '</a></td>';
             echo '<td>' . esc_html(date('Y-m-d H:i', $start)) . '</td>';
             echo '<td>' . esc_html(date('Y-m-d H:i', $end)) . '</td>';
             echo '<td>' . $status . '</td>';
             echo '<td>' . esc_html($time_remaining) . '</td>';
-            // Actions column
             echo '<td>';
+            if ($round_ref) {
+                echo '<div class="pb-round-live" data-round-ref="' . esc_attr($round_ref) . '">' . esc_html__('Loading…', 'projectbaldwin') . '</div>';
+            } else {
+                echo '<em>' . esc_html__('Waiting for reference', 'projectbaldwin') . '</em>';
+            }
+            echo '</td>';
+            // Actions column
+            echo '<td class="pb-round-actions">';
+            $permalink = get_permalink($round->ID);
+            if ($permalink) {
+                echo '<a class="button button-small" href="' . esc_url($permalink) . '" target="_blank" rel="noopener noreferrer">' . esc_html__('View Round', 'projectbaldwin') . '</a> ';
+            }
             if ($now >= $start && $now <= $end) {
                 $url = admin_url('admin-post.php?action=pb_end_voting_round&round_id=' . $round->ID . '&_wpnonce=' . wp_create_nonce('pb_end_round_' . $round->ID));
-                echo '<a href="' . esc_url($url) . '" style="color:#dc3232;font-weight:bold;" onclick="return confirm(\'Are you sure you want to end this round now?\');">' . esc_html__('End Now', 'projectbaldwin') . '</a>';
+                echo '<a class="button button-small button-danger" href="' . esc_url($url) . '" onclick="return confirm(\'' . esc_js(__('Are you sure you want to end this round now?', 'projectbaldwin')) . '\');">' . esc_html__('End Now', 'projectbaldwin') . '</a>';
             }
             echo '</td>';
             echo '</tr>';
         }
 
-        echo '</tbody></table></div>';
+        echo '</tbody></table>';
+        echo '</form>';
+        ?>
+        <style>
+            .pb-status-badge {
+                display:inline-block;
+                padding:2px 8px;
+                border-radius:12px;
+                font-size:12px;
+                font-weight:600;
+                line-height:1.5;
+                text-transform:uppercase;
+            }
+            .pb-status-active {background:#e6f4ea;color:#137333;}
+            .pb-status-upcoming {background:#fff4e5;color:#c47f00;}
+            .pb-status-expired {background:#fdecea;color:#c5221f;}
+            .pb-round-live {font-size:13px;line-height:1.5;}
+            .pb-round-live strong {display:block;font-size:14px;}
+            .pb-round-live ul {margin:6px 0 0 16px;padding:0;}
+            .pb-round-live li {margin:0;padding:0;}
+            .pb-round-actions .button-danger {
+                background:#c5221f;
+                border-color:#c5221f;
+                color:#fff;
+            }
+            .pb-round-actions .button-danger:hover {
+                background:#a31812;
+                border-color:#a31812;
+            }
+            .pb-rounds-bulk-form {
+                margin-top:15px;
+            }
+            .pb-bulk-controls {
+                margin-bottom:10px;
+            }
+            .pb-bulk-controls select {
+                min-width:200px;
+            }
+            .pb-col-select {
+                width:36px;
+            }
+            .pb-col-select input[type="checkbox"] {
+                margin:0 auto;
+                display:block;
+            }
+        </style>
+        <script>
+        document.addEventListener('DOMContentLoaded', function(){
+            var liveCells = document.querySelectorAll('.pb-round-live[data-round-ref]');
+            if (!liveCells.length) {
+                return;
+            }
+            var restRoot = <?php echo wp_json_encode($rest_root); ?>;
+            var nonce = <?php echo wp_json_encode($rest_nonce); ?>;
+            var noVotesText = <?php echo wp_json_encode(__('No votes yet', 'projectbaldwin')); ?>;
+            var votesLabel = <?php echo wp_json_encode(__('votes total', 'projectbaldwin')); ?>;
+            var masterCheckbox = document.querySelector('.pb-select-all');
+            if (masterCheckbox) {
+                masterCheckbox.addEventListener('change', function(){
+                    var checkboxes = document.querySelectorAll('.pb-col-select input[type="checkbox"][name="round_ids[]"]');
+                    checkboxes.forEach(function(cb){ cb.checked = masterCheckbox.checked; });
+                });
+            }
+
+            liveCells.forEach(function(cell){
+                var ref = cell.getAttribute('data-round-ref');
+                if (!ref) {
+                    cell.textContent = noVotesText;
+                    return;
+                }
+                fetch(restRoot + 'round/' + encodeURIComponent(ref) + '/totals?sort=highest', {
+                    headers: { 'X-WP-Nonce': nonce }
+                }).then(function(response){
+                    if (!response.ok) {
+                        throw new Error('Request failed');
+                    }
+                    return response.json();
+                }).then(function(payload){
+                    if (!payload || !Array.isArray(payload.results) || !payload.results.length) {
+                        cell.textContent = noVotesText;
+                        return;
+                    }
+                    var totalVotes = 0;
+                    var leaders = [];
+                    payload.results.forEach(function(result, index){
+                        var votes = parseInt(result.votes, 10) || 0;
+                        totalVotes += votes;
+                        if (leaders.length < 3) {
+                            var label = result.post_title || result.post_ref || ('ID ' + (result.post_id || ''));
+                            leaders.push((index + 1) + '. ' + label + ' (' + votes + ')');
+                        }
+                    });
+                    var html = '<strong>' + totalVotes + ' ' + votesLabel + '</strong>';
+                    if (leaders.length) {
+                        html += '<ul><li>' + leaders.join('</li><li>') + '</li></ul>';
+                    }
+                    cell.innerHTML = html;
+                }).catch(function(){
+                    cell.textContent = '<?php echo esc_js(__('Unable to load totals', 'projectbaldwin')); ?>';
+                });
+            });
+        });
+        </script>
+        <?php
+        echo '</div>';
     }
 
     /**
@@ -1335,5 +1487,79 @@ private static function fetch_nomination_participants(array $categories) {
         $redirect = add_query_arg('pb_notice', urlencode(__('Voting round ended early.', 'projectbaldwin')), admin_url('edit.php?post_type=voting_round&page=active_voting_rounds'));
         wp_safe_redirect($redirect);
         exit;
+    }
+
+    public static function handle_bulk_voting_round_action() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('You do not have permission to manage voting rounds.', 'projectbaldwin'));
+        }
+        if (!isset($_POST['pb_bulk_nonce']) || !wp_verify_nonce($_POST['pb_bulk_nonce'], 'pb_bulk_rounds')) {
+            wp_die(__('Nonce verification failed.', 'projectbaldwin'));
+        }
+        $action = isset($_POST['pb_bulk_action']) ? sanitize_key($_POST['pb_bulk_action']) : '';
+        $round_ids = isset($_POST['round_ids']) ? array_map('intval', (array) $_POST['round_ids']) : [];
+
+        if (!$action || empty($round_ids)) {
+            $redirect = add_query_arg('pb_notice', urlencode(__('No action performed. Select at least one round and an action.', 'projectbaldwin')), admin_url('edit.php?post_type=voting_round&page=active_voting_rounds'));
+            wp_safe_redirect($redirect);
+            exit;
+        }
+
+        $success = 0;
+        $failed = 0;
+        foreach ($round_ids as $round_id) {
+            if (get_post_type($round_id) !== 'voting_round') {
+                $failed++;
+                continue;
+            }
+            if ($action === 'end_now') {
+                if (self::force_end_round($round_id)) {
+                    $success++;
+                } else {
+                    $failed++;
+                }
+            } elseif ($action === 'archive') {
+                $archive = wp_update_post([
+                    'ID' => $round_id,
+                    'post_status' => 'draft',
+                ], true);
+                if (!is_wp_error($archive)) {
+                    $success++;
+                } else {
+                    $failed++;
+                }
+            }
+        }
+
+        $message = sprintf(
+            /* translators: 1: number succeeded, 2: number failed */
+            __('Bulk action complete. %1$d succeeded, %2$d failed.', 'projectbaldwin'),
+            $success,
+            $failed
+        );
+
+        $redirect = add_query_arg('pb_notice', urlencode($message), admin_url('edit.php?post_type=voting_round&page=active_voting_rounds'));
+        wp_safe_redirect($redirect);
+        exit;
+    }
+
+    private static function force_end_round($round_id) {
+        $start_str = get_post_meta($round_id, self::ROUND_START_META, true);
+        $start_ts = strtotime($start_str);
+        $now_ts = current_time('timestamp');
+        if (!$start_ts || $now_ts < $start_ts) {
+            return false;
+        }
+
+        $duration_days = max(1, ceil(($now_ts - $start_ts) / DAY_IN_SECONDS));
+        update_post_meta($round_id, self::ROUND_DURATION_META, $duration_days);
+        update_post_meta($round_id, '_pb_round_end', date('Y-m-d\TH:i', $now_ts));
+
+        $round_ref = get_post_meta($round_id, self::ROUND_REF_META, true);
+        if ($round_ref) {
+            self::snapshot_round_results($round_id, $round_ref);
+        }
+
+        return true;
     }
 }
