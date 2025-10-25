@@ -241,6 +241,12 @@ class PB_Voting_Service {
         $pb_rest_root  = rest_url('pb/v1/');
 
         $round_state          = get_post_meta($post->ID, self::ROUND_STATE_META, true);
+        if (!$round_state || !in_array($round_state, self::$round_states, true)) {
+            $round_state = 'custom';
+        }
+        $is_nomination = ($round_state === 'nomination');
+        $is_final      = ($round_state === 'final');
+        $is_custom     = ($round_state === 'custom');
         $selected_cats        = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
         $manual_participants  = (array) get_post_meta($post->ID, self::ROUND_MANUAL_META, true);
         $cached_participants  = array_map('intval', (array) get_post_meta($post->ID, self::ROUND_PARTICIPANTS_META, true));
@@ -299,7 +305,7 @@ class PB_Voting_Service {
   <label><input type="radio" name="pb_round_state" value="custom" <?php checked($round_state, 'custom'); ?>> Custom</label>
 
   <!-- === Section: Nomination Fields === -->
-  <div class="pb-field-group pb-field-nomination" style="margin-top:10px;">
+  <fieldset class="pb-field-group pb-field-nomination" style="margin-top:10px;" <?php disabled(!$is_nomination); ?>>
     <h3>Nomination Round Settings</h3>
     <p><label><strong>Categories</strong></label></p>
     <div class="pb-checkbox-list">
@@ -314,10 +320,10 @@ class PB_Voting_Service {
     <p><label for="pb_total_nominees"><strong>Total Nominees</strong></label><br>
       <input type="number" name="pb_total_nominees" id="pb_total_nominees" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_nominees', true)); ?>" min="1" step="1" class="small-text">
     </p>
-  </div>
+  </fieldset>
 
   <!-- === Section: Final Fields === -->
-  <div class="pb-field-group pb-field-final" style="margin-top:10px;">
+  <fieldset class="pb-field-group pb-field-final" style="margin-top:10px;" <?php disabled(!$is_final); ?>>
     <h3>Final Round Settings</h3>
     <p><label for="pb_round_source"><strong>Final Round Source</strong></label><br>
       <input type="text" name="pb_round_source" id="pb_round_source" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_round_source', true)); ?>" placeholder="Search or enter reference ID" class="widefat">
@@ -325,15 +331,15 @@ class PB_Voting_Service {
     <p><label for="pb_total_places"><strong>Total Places</strong></label><br>
       <input type="number" name="pb_total_places" id="pb_total_places" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_places', true)); ?>" min="1" step="1" class="small-text">
     </p>
-  </div>
+  </fieldset>
 
   <!-- === Section: Custom Fields === -->
-  <div class="pb-field-group pb-field-custom" style="margin-top:10px;">
+  <fieldset class="pb-field-group pb-field-custom" style="margin-top:10px;" <?php disabled(!$is_custom); ?>>
     <h3>Custom Round Settings</h3>
     <?php $custom_select_mode = get_post_meta($post->ID, '_pb_round_custom_select_mode', true); ?>
     <label><input type="checkbox" id="pb_custom_select_toggle" name="pb_custom_select_mode" value="category" <?php checked($custom_select_mode, 'category'); ?>> Select by Category instead of Custom Participants</label>
 
-    <div class="pb-custom-by-category" style="margin-top:10px;">
+      <div class="pb-custom-by-category" style="margin-top:10px;">
       <p><label><strong>Categories</strong></label></p>
       <div class="pb-checkbox-list">
         <?php
@@ -371,7 +377,7 @@ class PB_Voting_Service {
     <p><label for="pb_total_places_custom"><strong>Total Places</strong></label><br>
       <input type="number" name="pb_total_places" id="pb_total_places_custom" value="<?php echo esc_attr(get_post_meta($post->ID, '_pb_total_places', true)); ?>" min="1" step="1" class="small-text">
     </p>
-  </div>
+  </fieldset>
 
   <!-- === Section: Round Reference and Selected Participants (Always Visible) === -->
   <!--
@@ -497,24 +503,28 @@ class PB_Voting_Service {
 // Unified admin JS for round-type toggling, custom mode, and participant search.
 <script>
 (function($){
+  function setGroupState($group, enabled) {
+    if (!$group || !$group.length) {
+      return;
+    }
+    $group.toggle(enabled);
+    $group.prop('disabled', !enabled);
+    $group.find(':input').prop('disabled', !enabled);
+  }
+
   // === Toggle Round Type Fields ===
   function toggleFields() {
     var val = $('input[name="pb_round_state"]:checked').val();
-    $('.pb-field-group').hide();
-    if(val === 'nomination') $('.pb-field-nomination').show();
-    if(val === 'final') $('.pb-field-final').show();
-    if(val === 'custom') $('.pb-field-custom').show();
+    setGroupState($('.pb-field-nomination'), val === 'nomination');
+    setGroupState($('.pb-field-final'), val === 'final');
+    setGroupState($('.pb-field-custom'), val === 'custom');
   }
 
   // === Toggle Custom Selection Mode ===
   function toggleCustomMode() {
-    if($('#pb_custom_select_toggle').is(':checked')) {
-      $('.pb-custom-by-category').show();
-      $('.pb-custom-by-manual').hide();
-    } else {
-      $('.pb-custom-by-category').hide();
-      $('.pb-custom-by-manual').show();
-    }
+    var byCategory = $('#pb_custom_select_toggle').is(':checked');
+    setGroupState($('.pb-custom-by-category'), byCategory);
+    setGroupState($('.pb-custom-by-manual'), !byCategory);
   }
 
   // === Participant Search Filter ===
