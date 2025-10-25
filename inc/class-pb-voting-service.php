@@ -244,13 +244,22 @@ class PB_Voting_Service {
         $selected_cats        = (array) get_post_meta($post->ID, self::ROUND_CATEGORY_META, true);
         $manual_participants  = (array) get_post_meta($post->ID, self::ROUND_MANUAL_META, true);
         $cached_participants  = array_map('intval', (array) get_post_meta($post->ID, self::ROUND_PARTICIPANTS_META, true));
-        $manual_participant_options = get_posts([
-            'post_type'      => ['business', 'person', 'event'],
-            'post_status'    => ['publish', 'draft'],
-            'posts_per_page' => -1,
-            'orderby'        => 'title',
-            'order'          => 'ASC',
-        ]);
+
+        $manual_participant_options = self::fetch_manual_participant_options();
+        $manual_option_ids = array_map(static function($row) {
+            return isset($row['ID']) ? (int) $row['ID'] : 0;
+        }, $manual_participant_options);
+        $manual_option_ids = array_filter($manual_option_ids);
+
+        $missing_manual_ids = array_diff(array_map('intval', $manual_participants), $manual_option_ids);
+        if (!empty($missing_manual_ids)) {
+            foreach (self::get_participant_posts($missing_manual_ids) as $extra_post) {
+                $manual_participant_options[] = [
+                    'ID'    => $extra_post->ID,
+                    'label' => sprintf('%s — %s', get_the_title($extra_post), ucfirst($extra_post->post_type)),
+                ];
+            }
+        }
 
         $selected_participant_ids = $cached_participants;
         if (empty($selected_participant_ids)) {
@@ -341,12 +350,19 @@ class PB_Voting_Service {
       <input type="text" id="pb-participant-search" placeholder="Search participants..." style="width:100%;margin-bottom:5px;">
       <div id="pb-manual-participants" class="pb-checkbox-list" style="max-height:250px; overflow-y:auto;">
         <?php
-        foreach ($manual_participant_options as $participant_post) {
-            $is_selected = in_array($participant_post->ID, $manual_participants, true);
-            echo '<label><input type="checkbox" name="pb_round_manual_participants[]" value="' . esc_attr($participant_post->ID) . '" ' . checked($is_selected, true, false) . '> ' . esc_html($participant_post->post_title) . '</label><br>';
+        foreach ($manual_participant_options as $option) {
+            $participant_id = isset($option['ID']) ? (int) $option['ID'] : 0;
+            if (!$participant_id) {
+                continue;
+            }
+            $label = isset($option['label']) ? $option['label'] : sprintf(__('Participant #%d', 'projectbaldwin'), $participant_id);
+            $is_selected = in_array($participant_id, $manual_participants, true);
+            echo '<label><input type="checkbox" name="pb_round_manual_participants[]" value="' . esc_attr($participant_id) . '" ' . checked($is_selected, true, false) . '> ' . esc_html($label) . '</label><br>';
         }
         if (empty($manual_participant_options)) {
             echo '<em>' . esc_html__('No participants available to select.', 'projectbaldwin') . '</em>';
+        } else {
+            echo '<p class="description" style="margin-top:8px;">' . esc_html__('Showing up to 200 recently added participants. Use search to filter the list.', 'projectbaldwin') . '</p>';
         }
         ?>
       </div>
